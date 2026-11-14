@@ -1,0 +1,15 @@
+// SyncSpace database schema.
+// Phase 1 establishes the connection and migration workflow only;
+// domain models are introduced by the phases that need them.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  runtime             = "nodejs"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}

@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+
+# Build outputs
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Generated Prisma client
+packages/database/src/generated/
+
+# Logs
+*.log
+npm-debug.log*
+.pnpm-debug.log*
+
+# OS and editor
+.DS_Store
+.idea/
+.vscode/
+.vercel
