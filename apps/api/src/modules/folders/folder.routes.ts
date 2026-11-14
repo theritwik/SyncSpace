@@ -1,5 +1,6 @@
 import type { Folder, PrismaClient } from "@syncspace/database";
 import {
+  canEditDocuments,
   createFolderRequestSchema,
   getFolderPath,
   MAX_FOLDER_DEPTH,
@@ -11,7 +12,11 @@ import type { FastifyPluginAsync } from "fastify";
 
 import { HttpError, validate } from "../../http/errors.js";
 import { requireUser } from "../auth/session.js";
-import { requireWorkspaceAccess, slugParamsSchema } from "../workspaces/workspace.access.js";
+import {
+  assertAllowed,
+  requireWorkspaceAccess,
+  slugParamsSchema,
+} from "../workspaces/workspace.access.js";
 
 export interface FolderRoutesOptions {
   db: PrismaClient;
@@ -70,7 +75,8 @@ export const folderRoutes: FastifyPluginAsync<FolderRoutesOptions> = async (app,
   app.post("/workspaces/:slug/folders", async (request, reply): Promise<FolderResponse> => {
     const user = await requireUser(db, request);
     const { slug } = validate(slugParamsSchema, request.params);
-    const { workspace } = await requireWorkspaceAccess(db, user.id, slug);
+    const { workspace, role } = await requireWorkspaceAccess(db, user.id, slug);
+    assertAllowed(canEditDocuments(role));
     const { name, parentId } = validate(createFolderRequestSchema, request.body);
 
     if (parentId) {

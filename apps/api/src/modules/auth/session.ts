@@ -35,8 +35,16 @@ export async function createSession(
   return { token, expiresAt };
 }
 
-/** Returns the user that owns a valid, unexpired session token, or null. */
-export async function findSessionUser(db: PrismaClient, token: string): Promise<User | null> {
+export interface AuthenticatedSession {
+  sessionId: string;
+  user: User;
+}
+
+/** Returns the session and its user for a valid, unexpired session token, or null. */
+export async function findSession(
+  db: PrismaClient,
+  token: string,
+): Promise<AuthenticatedSession | null> {
   const session = await db.session.findUnique({
     where: { tokenHash: hashSessionToken(token) },
     include: { user: true },
@@ -49,7 +57,7 @@ export async function findSessionUser(db: PrismaClient, token: string): Promise<
     return null;
   }
 
-  return session.user;
+  return { sessionId: session.id, user: session.user };
 }
 
 export async function deleteSession(db: PrismaClient, token: string): Promise<void> {
@@ -65,10 +73,18 @@ export function deleteExpiredSessions(db: PrismaClient, userId: string): Promise
  * Call it at the top of any handler that requires authentication.
  */
 export async function requireUser(db: PrismaClient, request: FastifyRequest): Promise<User> {
+  return (await requireSession(db, request)).user;
+}
+
+/** Like `requireUser`, for the few handlers that also need to know which session is in use. */
+export async function requireSession(
+  db: PrismaClient,
+  request: FastifyRequest,
+): Promise<AuthenticatedSession> {
   const token = request.cookies[SESSION_COOKIE_NAME];
-  const user = token ? await findSessionUser(db, token) : null;
-  if (!user) {
+  const session = token ? await findSession(db, token) : null;
+  if (!session) {
     throw new HttpError(401, "UNAUTHENTICATED", "You are not signed in.");
   }
-  return user;
+  return session;
 }

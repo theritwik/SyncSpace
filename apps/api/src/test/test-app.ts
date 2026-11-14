@@ -6,6 +6,7 @@ import { inject } from "vitest";
 import { buildApp, type AppConfig, type AppOptions } from "../app.js";
 
 export const TEST_WEB_ORIGIN = "http://localhost:3000";
+export const TEST_COLLABORATION_TOKEN_SECRET = "test-secret-test-secret-test-secret-1234";
 
 interface TestAppOverrides {
   config?: Partial<AppConfig>;
@@ -26,6 +27,7 @@ export function createTestApp(overrides: TestAppOverrides = {}): {
       secureCookies: false,
       sessionTtlDays: 7,
       trustProxy: false,
+      collaborationTokenSecret: TEST_COLLABORATION_TOKEN_SECRET,
       ...overrides.config,
       // High limits by default so ordinary tests never trip the rate limiter.
       rateLimits: {

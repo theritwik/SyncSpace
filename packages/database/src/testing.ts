@@ -9,19 +9,21 @@ const packageRoot = path.resolve(import.meta.dirname, "..");
  * Prepares a dedicated database for integration tests and returns its URL.
  *
  * The test database is the configured one with a `_test` suffix
- * (`syncspace` -> `syncspace_test`). It is created if missing and brought up
+ * (`syncspace` -> `syncspace_test`). Test suites that run at the same time
+ * pass their own `suffix` so they do not share a database. It is created if missing and brought up
  * to date with `prisma migrate deploy`, so tests can freely insert and delete
  * rows without touching development data.
  */
 export async function setupTestDatabase(
   databaseUrl: string | undefined = process.env.DATABASE_URL,
+  suffix = "test",
 ): Promise<string> {
   if (!databaseUrl) {
     throw new Error("DATABASE_URL must be set to run database integration tests.");
   }
 
   const testUrl = new URL(databaseUrl);
-  const testDatabaseName = `${testUrl.pathname.slice(1)}_test`;
+  const testDatabaseName = `${testUrl.pathname.slice(1)}_${suffix}`;
   // The name is interpolated into CREATE DATABASE below (identifiers cannot be
   // query parameters), so only plain identifiers are accepted.
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(testDatabaseName)) {

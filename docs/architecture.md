@@ -3,7 +3,7 @@
 This document separates what **exists today** from what is **planned**.
 Anything under "Planned" is a direction, not an implementation.
 
-## Current architecture (Phase 4 — documents and folders)
+## Current architecture (Phase 5 — real-time collaborative editor)
 
 ```
                  ┌──────────────────────┐
@@ -26,9 +26,11 @@ Anything under "Planned" is a direction, not an implementation.
                  │  PostgreSQL 17       │  :5432 (Docker Compose)
                  └──────────────────────┘
 
-                 ┌──────────────────────┐
-                 │  collaboration       │  :4001
-                 │  GET /health only    │  (not yet connected to anything)
+  Browser ──WebSocket (Yjs sync + awareness)──┐
+                                              ▼
+                 ┌──────────────────────┐   reads sessions/memberships,
+                 │  collaboration       │   reads/writes document_contents
+                 │  (Hocuspocus)  :4001 │ ───────────────▶ PostgreSQL
                  └──────────────────────┘
 ```
 
@@ -38,7 +40,7 @@ Anything under "Planned" is a direction, not an implementation.
 | -------------------------- | ------------------------------------------------------------------------------ |
 | `@syncspace/web`           | Next.js App Router frontend: landing page, login, registration, and the signed-in dashboard (workspaces, settings, account). |
 | `@syncspace/api`           | Fastify REST API: health check, authentication and workspaces.                 |
-| `@syncspace/collaboration` | Standalone Node.js HTTP service with a liveness endpoint. No document sync.    |
+| `@syncspace/collaboration` | Hocuspocus server: real-time document sync, presence, access checks and persistence of document content. |
 | `@syncspace/database`      | Prisma schema (`User`, `Session`, `Workspace`, `WorkspaceMember`), migrations, generated client, test-database helper. |
 | `@syncspace/shared`        | Env validation helper, the API contracts (Zod) for auth, workspaces, errors and health, and the role permission rules. |
 
@@ -264,9 +266,9 @@ workspaces ──< folders ──< folders (parent_id, nested)
 
 ### Access control
 
-There are no per-document permissions: access follows workspace membership,
-and every member may create, rename, move and delete documents and create
-folders.
+There are no per-document permissions: access follows workspace membership.
+Owners, admins and members may create, rename, move and delete documents and
+create folders; viewers may only read (`403` on writes).
 
 - `/workspaces/:slug/...` routes go through `requireWorkspaceAccess()`, as
   the workspace routes do.
@@ -289,13 +291,137 @@ folders.
 
 ### Known limitations
 
-- **No document content or editor.** That is the next phase.
 - **No trash, restore or permanent deletion** of soft-deleted documents.
 - **Folders cannot be renamed, moved or deleted.**
 - **Lists are capped at 100 documents** per request and have no pagination.
 - **Names are not unique:** two documents or sibling folders may share a name.
 - **Search does not cover documents** yet (workspaces and pages only).
 - **Timestamps are shown in UTC**, because they are rendered on the server.
+
+## Real-time collaboration
+
+### The moving parts
+
+| Part | Role |
+| --- | --- |
+| **Yjs** | A CRDT: a document format in which any two copies can always be merged, in any order, into the same result. Every browser tab and the server hold a copy. |
+| **Tiptap** | The editor. Its Collaboration extension binds the editor to a Yjs document, so typing changes the CRDT and remote changes update the editor. |
+| **Hocuspocus** | Server (`apps/collaboration`) and browser provider that exchange Yjs updates over a WebSocket using the standard Yjs sync and awareness protocols. No custom sync messages are defined. |
+| **PostgreSQL** | Stores each document's Yjs state in `document_contents`. |
+
+Each document is one "room", named by the document's id. The Yjs document is
+the only copy of the content: nothing editable is kept as HTML or JSON, and
+the REST API neither returns nor accepts content.
+
+### Opening a document
+
+```
+Browser                         API                    Collaboration server        PostgreSQL
+  │  POST /documents/:id/collaboration-token (cookie)       │                          │
+  │ ───────────────────────────▶│  session + membership check ───────────────────────▶│
+  │ ◀── token (60 s, signed) ───│                           │                          │
+  │  WebSocket + token ───────────────────────────────────▶ │ verify signature         │
+  │                                                         │ session, membership, role ▶│
+  │                                                         │ load document state ─────▶│
+  │ ◀═══════════ Yjs sync, then live updates ═════════════▶ │                          │
+```
+
+- The **token** (`packages/shared/src/collaboration-token.ts`) is an
+  HMAC-signed statement "user U, in login session S, may ask to open document
+  D, until time T". It is needed because the collaboration server is a
+  separate origin and never sees the session cookie. It contains **no role**.
+- The **collaboration server** verifies the signature and expiry, requires
+  the token's document to be the room being opened, and then looks everything
+  else up in the database itself (`apps/collaboration/src/access.ts`): the
+  session must still exist, the document must not be deleted, the user must be
+  a member. The user's role decides read-write or read-only.
+- Unknown or malformed room names never create a room or a database row.
+
+### Permissions
+
+| Role | Editor | Enforced by |
+| --- | --- | --- |
+| Owner, Admin, Member | read and write | — |
+| Viewer | read-only | the server marks the connection read-only and Hocuspocus discards every document update it sends |
+| not a member | no connection | `onAuthenticate` rejects it |
+
+The browser hides the toolbar and locks the editor based on the scope the
+*server* reports after authentication, but that is presentation only. A
+modified client that sends updates anyway is ignored (covered by tests).
+
+### Persistence and the "Saved" state
+
+- **Load:** when the first client opens a document, the server applies the
+  stored state to a new Yjs document. Hocuspocus loads a document once even
+  if several clients connect at the same moment.
+- **Store:** after changes the server writes the full state, debounced
+  (2 s after the last change, at most every 10 s), when the last client
+  leaves, and on shutdown (`SIGTERM`/`SIGINT` flush all unsaved documents).
+- **Never overwrite:** a store locks the existing row, merges it into the
+  live document, and writes the merged state in one transaction. A stale
+  writer therefore cannot erase newer content; it merges with it.
+- **Honest status:** after each store the server sends clients a Yjs snapshot
+  of exactly what it wrote. A client shows "Saved" only while its own
+  document is equal to that snapshot. Any local or remote change turns it
+  into "Syncing…" or "Saving…" until a later snapshot matches again.
+- Storing content also updates `documents.updated_at`. Merely opening a
+  document writes nothing.
+- **Presence is never stored.** Names and cursor positions travel through the
+  Yjs awareness protocol, live in memory only, and are removed when a client
+  disconnects, cleanly or not.
+
+### Disconnection and recovery
+
+- The provider reconnects automatically with backoff and requests a fresh
+  token each time. On reconnect, client and server exchange what the other is
+  missing; edits made offline are merged, not replayed over newer content.
+- While offline, editing continues in the tab and the status says so.
+  Offline edits are **not** stored in the browser: closing the tab loses
+  them (the page asks for confirmation first).
+- **Server restart or crash:** everything written to PostgreSQL is reloaded.
+  Clients that stayed open still hold the document and send anything the
+  server is missing when they reconnect.
+- **Access revoked while connected:** every
+  `COLLABORATION_ACCESS_RECHECK_SECONDS` (default 30) the server re-validates
+  all open connections against the database and closes those whose session
+  ended, whose membership was removed, or whose document was deleted. The
+  client's reconnect is then refused, the editor is locked and shows
+  "No access". If the login itself has ended, the page goes to the login
+  screen. A role change (e.g. member to viewer) forces a reconnect so the new
+  permission applies.
+- Undo/redo is provided by the Collaboration extension (Yjs undo manager) and
+  only reverts the user's own changes; Tiptap's regular history is disabled.
+
+### Known limitations
+
+- **Single collaboration server instance.** Rooms live in one process's
+  memory. Running several instances needs a shared pub/sub layer (the usual
+  choice is Redis), which is deliberately not included yet. The merge-on-store
+  logic prevents data loss if two instances ever overlap, but they would not
+  see each other's live edits.
+- **Up to 10 seconds of acknowledged edits can be lost if the server process
+  is killed** without a graceful shutdown and no client that has them stays
+  open. The UI shows "Saving…", not "Saved", during that window.
+- **Revocation is not instant:** it takes up to the re-check interval.
+- **No offline storage** in the browser (no IndexedDB persistence).
+- **Presence names and colours are self-reported** by authenticated clients.
+  A member with a modified client could display another name. Document
+  permissions are unaffected.
+- **No version history, comments, suggestions, or export.** Deleted text is
+  not recoverable through the UI.
+- **Document state only grows slowly smaller:** Yjs garbage-collects deleted
+  content but keeps some metadata; there is no compaction job.
+- **No size or rate limits** on documents or on updates from an authorised
+  editor.
+- **No links, images or tables** in the editor yet.
+- **The "Last updated" time in the document header** is rendered when the
+  page loads and does not tick while you edit.
+- **The token secret is shared** between API and collaboration service and
+  must be rotated on both together.
+- **The viewer role cannot be assigned from the UI** (no member management yet).
+- **Automated tests cover the server with real clients; the browser editor
+  itself was verified with one-off two-browser scripts**, not a committed
+  browser test suite.
 
 ### Code organisation
 
@@ -311,7 +437,15 @@ apps/api/src/
   modules/auth/                 auth.routes.ts, session.ts, password.ts + tests
   modules/workspaces/           workspace.routes.ts, workspace.access.ts, slug.ts + tests
   modules/folders/              folder.routes.ts + tests
-  modules/documents/            document.routes.ts + tests
+  modules/documents/            document.routes.ts, document.access.ts + tests
+  modules/collaboration/        collaboration.routes.ts (token endpoint only) + tests
+
+apps/collaboration/src/
+  main.ts                       process entry: env, database, listen, re-check timer, shutdown
+  collaboration-server.ts       Hocuspocus hooks: authenticate, load, store, saved messages, re-check
+  access.ts                     who may open a document, read-only or not (from the database)
+  persistence.ts                load and merge-store of Yjs state
+  config/env.ts                 Zod env schema
   test/                         test database setup and app factory
 
 apps/web/src/
@@ -328,6 +462,7 @@ apps/web/src/
   features/dashboard/           app shell: sidebar, switcher, search, user menu, skeletons
   features/workspaces/          data loading, create/rename/delete, lists, settings
   features/documents/           data loading, document browser, document page, rename/move/delete, folders
+  features/editor/              collaboration session (provider, status), Tiptap editor, toolbar, presence
   features/system-status/       health fetch + status component
 ```
 
@@ -355,7 +490,9 @@ a dedicated test database, without opening a port.
 - Tables: `users` (unique lower-cased email, Argon2id password hash),
   `sessions` (unique token hash, expiry, foreign key to `users` with
   `ON DELETE CASCADE`), `workspaces` (unique slug), `workspace_members`
-  (composite primary key, role enum), `folders` and `documents`. Ids are UUIDv7.
+  (composite primary key, role enum), `folders`, `documents` and
+  `document_contents` (Yjs state as `bytea`, one row per document, kept out
+  of the `documents` table so lists never load it). Ids are UUIDv7.
 - Integration tests use a separate `<database>_test` database, created and
   migrated on demand by `setupTestDatabase()` (`@syncspace/database/testing`).
 
@@ -385,21 +522,11 @@ a dedicated test database, without opening a port.
 
 The following is intended direction for later phases. None of it is built.
 
-```
-  Browser ──HTTP──▶ web ──HTTP──▶ api ──▶ PostgreSQL
-     │                             ▲
-     └──WebSocket──▶ collaboration ┘ (auth check, document persistence)
-```
-
 | Area              | Intent                                                                                         |
 | ----------------- | ---------------------------------------------------------------------------------------------- |
 | Account features  | Email verification, password reset, session management ("log out everywhere").                 |
-| Membership        | Invitations, role changes, removing members, ownership transfer.                               |
-| Document content  | An editor on the document page and content storage in PostgreSQL.                              |
-| Real-time editing | The collaboration service accepts WebSocket connections and synchronises document state between clients. The sync approach (e.g. CRDT-based) is still to be decided. |
+| Membership        | Invitations, role changes (including assigning viewers), removing members, ownership transfer. |
 | Sharing           | Document-level access and share links.                                                         |
+| Editor            | Links, images, tables; comments; version history; offline storage in the browser.              |
+| Scaling           | Several collaboration server instances behind a shared pub/sub layer (e.g. Redis).             |
 | Deployment        | Container images per app and a deployment pipeline.                                            |
-
-Open decisions to be made in the phases that need them: sync protocol and
-persistence format, and how the collaboration service authorises connections
-(it will need to validate the same session).

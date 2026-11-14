@@ -69,6 +69,8 @@ export const documentSchema = z.object({
 
 /** A single document with what a page needs to show where it lives. */
 export const documentDetailSchema = documentSchema.extend({
+  /** Whether the requesting user may change the document (false for viewers). */
+  canEdit: z.boolean(),
   workspace: z.object({ id: z.uuid(), name: z.string(), slug: z.string() }),
   /** Folders from the top level down to the one containing the document. Empty at the top level. */
   folderPath: z.array(z.object({ id: z.uuid(), name: z.string() })),

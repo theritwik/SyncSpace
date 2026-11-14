@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
+import { getCollaborationUrl } from "@/config/env";
+import { requireUser } from "@/features/auth/session";
 import { getDocument, listFolders } from "@/features/documents/data";
 import { DocumentView } from "@/features/documents/document-view";
 
@@ -16,8 +18,18 @@ export default async function DocumentPage({ params }: Props) {
   // Also the case for deleted documents and documents of workspaces the user is not in.
   if (!document) notFound();
 
-  const folders = await listFolders(document.workspace.slug);
+  const [folders, user] = await Promise.all([
+    listFolders(document.workspace.slug),
+    requireUser(),
+  ]);
   if (!folders) notFound();
 
-  return <DocumentView document={document} folders={folders} />;
+  return (
+    <DocumentView
+      document={document}
+      folders={folders}
+      user={{ id: user.id, name: user.name }}
+      collaborationUrl={getCollaborationUrl()}
+    />
+  );
 }

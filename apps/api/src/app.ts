@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastif
 import { registerErrorHandlers, tooManyAttempts } from "./http/errors.js";
 import { registerOriginCheck } from "./http/origin-check.js";
 import { authRoutes, type AuthRateLimits } from "./modules/auth/auth.routes.js";
+import { collaborationRoutes } from "./modules/collaboration/collaboration.routes.js";
 import { documentRoutes } from "./modules/documents/document.routes.js";
 import { folderRoutes } from "./modules/folders/folder.routes.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
@@ -21,6 +22,8 @@ export interface AppConfig {
   sessionTtlDays: number;
   /** Read the client IP from X-Forwarded-For. Only safe behind a trusted proxy. */
   trustProxy: boolean;
+  /** Signs the tokens that let browsers connect to the collaboration service. */
+  collaborationTokenSecret: string;
   /** Overrides for the default limits (used by tests). */
   rateLimits?: Partial<AuthRateLimits>;
 }
@@ -69,6 +72,11 @@ export function buildApp({
   app.register(workspaceRoutes, { prefix: "/api/v1/workspaces", db: database });
   app.register(folderRoutes, { prefix: "/api/v1", db: database });
   app.register(documentRoutes, { prefix: "/api/v1", db: database });
+  app.register(collaborationRoutes, {
+    prefix: "/api/v1",
+    db: database,
+    tokenSecret: config.collaborationTokenSecret,
+  });
 
   return app;
 }

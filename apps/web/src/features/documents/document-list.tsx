@@ -12,9 +12,16 @@ interface DocumentListProps {
   folders: FolderSummary[];
   /** Show which folder each document is in (for lists that span folders). */
   showLocation?: boolean;
+  /** Whether the user may rename, move and delete (false for viewers). */
+  canEdit: boolean;
 }
 
-export function DocumentList({ documents, folders, showLocation = false }: DocumentListProps) {
+export function DocumentList({
+  documents,
+  folders,
+  showLocation = false,
+  canEdit,
+}: DocumentListProps) {
   const folderNames = new Map(folders.map((folder) => [folder.id, folder.name]));
 
   return (
@@ -37,10 +44,12 @@ export function DocumentList({ documents, folders, showLocation = false }: Docum
                 {document.createdBy ? ` · Created by ${document.createdBy.name}` : null}
               </p>
             </div>
-            <DocumentActions
-              document={{ id: document.id, title: document.title, folderId: document.folderId }}
-              folders={folders}
-            />
+            {canEdit ? (
+              <DocumentActions
+                document={{ id: document.id, title: document.title, folderId: document.folderId }}
+                folders={folders}
+              />
+            ) : null}
           </li>
         );
       })}

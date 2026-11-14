@@ -19,3 +19,21 @@ export function getServerEnv(): ServerEnv {
   cachedEnv ??= parseEnv(serverEnvSchema, { API_URL: process.env.API_URL });
   return cachedEnv;
 }
+
+const collaborationEnvSchema = z.object({
+  COLLABORATION_URL: z.url({ protocol: /^wss?$/ }),
+});
+
+let cachedCollaborationUrl: string | undefined;
+
+/**
+ * WebSocket URL of the collaboration service as the browser must reach it.
+ * Read on the server at request time and handed to the editor, so it is
+ * runtime configuration rather than something baked into the build.
+ */
+export function getCollaborationUrl(): string {
+  cachedCollaborationUrl ??= parseEnv(collaborationEnvSchema, {
+    COLLABORATION_URL: process.env.COLLABORATION_URL,
+  }).COLLABORATION_URL;
+  return cachedCollaborationUrl;
+}

@@ -1,5 +1,6 @@
-import type { Document, PrismaClient, User, Workspace } from "@syncspace/database";
+import type { Document, PrismaClient, User, Workspace, WorkspaceRole } from "@syncspace/database";
 import {
+  canEditDocuments,
   createDocumentRequestSchema,
   getFolderPath,
   listDocumentsQuerySchema,
@@ -9,18 +10,20 @@ import {
   type DocumentSummary,
 } from "@syncspace/shared";
 import type { FastifyPluginAsync } from "fastify";
-import { z } from "zod";
 
-import { HttpError, validate } from "../../http/errors.js";
+import { validate } from "../../http/errors.js";
 import { requireUser } from "../auth/session.js";
 import { requireFolderInWorkspace } from "../folders/folder.routes.js";
-import { requireWorkspaceAccess, slugParamsSchema } from "../workspaces/workspace.access.js";
+import {
+  assertAllowed,
+  requireWorkspaceAccess,
+  slugParamsSchema,
+} from "../workspaces/workspace.access.js";
+import { documentParamsSchema, requireDocumentAccess } from "./document.access.js";
 
 export interface DocumentRoutesOptions {
   db: PrismaClient;
 }
-
-const documentParamsSchema = z.object({ id: z.uuid("Invalid document identifier.") });
 
 type DocumentWithCreator = Document & { createdBy: User | null };
 
@@ -42,6 +45,7 @@ async function toDocumentResponse(
   db: PrismaClient,
   document: DocumentWithCreator,
   workspace: Workspace,
+  role: WorkspaceRole,
 ): Promise<DocumentResponse> {
   const folders = document.folderId
     ? await db.folder.findMany({ where: { workspaceId: workspace.id } })
@@ -50,31 +54,11 @@ async function toDocumentResponse(
   return {
     document: {
       ...toDocumentSummary(document),
+      canEdit: canEditDocuments(role),
       workspace: { id: workspace.id, name: workspace.name, slug: workspace.slug },
       folderPath: getFolderPath(folders, document.folderId).map(({ id, name }) => ({ id, name })),
     },
   };
-}
-
-/**
- * The single gate to a document: loads it only if it is not deleted and the
- * user is a member of its workspace. Anything else is a 404, so the response
- * does not reveal whether a document id exists.
- */
-async function requireDocumentAccess(db: PrismaClient, userId: string, documentId: string) {
-  const document = await db.document.findFirst({
-    where: {
-      id: documentId,
-      deletedAt: null,
-      workspace: { members: { some: { userId } } },
-    },
-    include: { createdBy: true, workspace: true },
-  });
-
-  if (!document) {
-    throw new HttpError(404, "NOT_FOUND", "Document not found.");
-  }
-  return document;
 }
 
 export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (app, { db }) => {
@@ -106,7 +90,8 @@ export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
   app.post("/workspaces/:slug/documents", async (request, reply): Promise<DocumentResponse> => {
     const user = await requireUser(db, request);
     const { slug } = validate(slugParamsSchema, request.params);
-    const { workspace } = await requireWorkspaceAccess(db, user.id, slug);
+    const { workspace, role } = await requireWorkspaceAccess(db, user.id, slug);
+    assertAllowed(canEditDocuments(role));
     const { title, folderId } = validate(createDocumentRequestSchema, request.body ?? {});
 
     if (folderId) await requireFolderInWorkspace(db, workspace.id, folderId, "folderId");
@@ -117,22 +102,23 @@ export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
     });
 
     reply.code(201);
-    return toDocumentResponse(db, document, workspace);
+    return toDocumentResponse(db, document, workspace, role);
   });
 
   app.get("/documents/:id", async (request): Promise<DocumentResponse> => {
     const user = await requireUser(db, request);
     const { id } = validate(documentParamsSchema, request.params);
-    const document = await requireDocumentAccess(db, user.id, id);
+    const { document, role } = await requireDocumentAccess(db, user.id, id);
 
-    return toDocumentResponse(db, document, document.workspace);
+    return toDocumentResponse(db, document, document.workspace, role);
   });
 
   /** Rename and/or move a document. */
   app.patch("/documents/:id", async (request): Promise<DocumentResponse> => {
     const user = await requireUser(db, request);
     const { id } = validate(documentParamsSchema, request.params);
-    const existing = await requireDocumentAccess(db, user.id, id);
+    const { document: existing, role } = await requireDocumentAccess(db, user.id, id);
+    assertAllowed(canEditDocuments(role));
     const { title, folderId } = validate(updateDocumentRequestSchema, request.body);
 
     // The target folder must belong to the document's own workspace.
@@ -145,14 +131,15 @@ export const documentRoutes: FastifyPluginAsync<DocumentRoutesOptions> = async (
       include: { createdBy: true },
     });
 
-    return toDocumentResponse(db, document, existing.workspace);
+    return toDocumentResponse(db, document, existing.workspace, role);
   });
 
   /** Soft delete: the row stays, but the document disappears from every endpoint. */
   app.delete("/documents/:id", async (request, reply) => {
     const user = await requireUser(db, request);
     const { id } = validate(documentParamsSchema, request.params);
-    const document = await requireDocumentAccess(db, user.id, id);
+    const { document, role } = await requireDocumentAccess(db, user.id, id);
+    assertAllowed(canEditDocuments(role));
 
     await db.document.update({ where: { id: document.id }, data: { deletedAt: new Date() } });
 
