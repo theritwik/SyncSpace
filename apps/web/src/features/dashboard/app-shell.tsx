@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { CreateWorkspaceProvider } from "@/features/workspaces/create-workspace";
 
+import { ActiveWorkspaceProvider } from "./active-workspace";
 import { CommandMenu } from "./command-menu";
 import { MobileSidebar } from "./mobile-sidebar";
 import { Sidebar } from "./sidebar";
@@ -17,6 +18,7 @@ interface AppShellProps {
 /** The frame around every signed-in page: sidebar, header and the page content. */
 export function AppShell({ user, workspaces, children }: AppShellProps) {
   return (
+    <ActiveWorkspaceProvider>
     <CreateWorkspaceProvider>
       {/* First focusable element: lets keyboard users jump past the navigation. */}
       <a
@@ -50,5 +52,6 @@ export function AppShell({ user, workspaces, children }: AppShellProps) {
         </div>
       </div>
     </CreateWorkspaceProvider>
+    </ActiveWorkspaceProvider>
   );
 }

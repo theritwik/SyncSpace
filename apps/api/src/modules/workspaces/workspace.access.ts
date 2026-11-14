@@ -1,6 +1,13 @@
 import type { PrismaClient, Workspace, WorkspaceRole } from "@syncspace/database";
 
+import { z } from "zod";
+
 import { HttpError } from "../../http/errors.js";
+
+/** Route parameters of every `/workspaces/:slug/...` route. */
+export const slugParamsSchema = z.object({
+  slug: z.string().regex(/^[a-z0-9-]{1,64}$/, "Invalid workspace identifier."),
+});
 
 export interface WorkspaceAccess {
   workspace: Workspace & { _count: { members: number } };

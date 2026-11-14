@@ -3,7 +3,7 @@
 This document separates what **exists today** from what is **planned**.
 Anything under "Planned" is a direction, not an implementation.
 
-## Current architecture (Phase 3 — workspaces)
+## Current architecture (Phase 4 — documents and folders)
 
 ```
                  ┌──────────────────────┐
@@ -18,6 +18,7 @@ Anything under "Planned" is a direction, not an implementation.
                  │  /api/v1/health      │
                  │  /api/v1/auth/*      │
                  │  /api/v1/workspaces  │
+                 │  /api/v1/documents   │
                  └──────────┬───────────┘
                             │ Prisma + node-postgres adapter (DATABASE_URL)
                             ▼
@@ -229,6 +230,73 @@ same functions only to decide which controls to show.
 - **No automated browser tests.** The UI was verified with one-off browser
   scripts, not a committed suite.
 
+## Documents and folders
+
+### Data model
+
+```
+workspaces ──< folders ──< folders (parent_id, nested)
+     │            │
+     └────────────┴──< documents (folder_id nullable, deleted_at nullable)
+```
+
+- A document belongs to exactly one workspace and optionally to one folder.
+  `folder_id = NULL` means the top level of the workspace.
+- **Workspace mismatches are impossible at the database level.** `folders`
+  has a unique key on `(id, workspace_id)`, and both `documents.folder_id`
+  and `folders.parent_id` reference it together with their own
+  `workspace_id` (composite foreign keys). A document or subfolder can
+  therefore only point at a folder of the same workspace, whatever the
+  application code does.
+- A `CHECK` constraint forbids a folder from being its own parent. Longer
+  cycles cannot arise because a folder's parent is set at creation and there
+  is no operation that changes it. Nesting is limited to 5 levels by the API.
+- **Soft deletion:** deleting a document sets `deleted_at`. Every query
+  filters on `deleted_at IS NULL`, so a deleted document behaves as if it did
+  not exist, while the row remains for a future trash/restore feature.
+- `created_by_id` is set to `NULL` if the creating user is deleted, so
+  content outlives accounts.
+- Deleting a workspace removes its folders and documents (`ON DELETE
+  CASCADE`). Deleting a folder would also remove its subfolders and
+  documents; no API does that yet.
+- Index `(workspace_id, deleted_at, updated_at DESC)` serves the main query:
+  a workspace's live documents, most recently updated first.
+
+### Access control
+
+There are no per-document permissions: access follows workspace membership,
+and every member may create, rename, move and delete documents and create
+folders.
+
+- `/workspaces/:slug/...` routes go through `requireWorkspaceAccess()`, as
+  the workspace routes do.
+- `/documents/:id` routes go through `requireDocumentAccess()`, which loads
+  the document only if it is not deleted **and** the caller is a member of
+  its workspace. Anything else is `404`.
+- A `folderId`/`parentId` in a request body is checked against the folders
+  of the target workspace and rejected with `400` otherwise, which is also
+  the answer for a folder of another workspace.
+
+### Web
+
+- `/w/[slug]/documents` and `/w/[slug]/folders/[folderId]` render the same
+  `DocumentBrowser`: breadcrumbs, subfolders and the documents of one level.
+- `/documents/[documentId]` is the document page. Its URL contains no
+  workspace, so the page announces its workspace to the sidebar through a
+  small React context (`features/dashboard/active-workspace.tsx`).
+- The workspace overview shows the five most recently updated documents.
+- "Updated" reflects the last rename or move; there is no content to edit yet.
+
+### Known limitations
+
+- **No document content or editor.** That is the next phase.
+- **No trash, restore or permanent deletion** of soft-deleted documents.
+- **Folders cannot be renamed, moved or deleted.**
+- **Lists are capped at 100 documents** per request and have no pagination.
+- **Names are not unique:** two documents or sibling folders may share a name.
+- **Search does not cover documents** yet (workspaces and pages only).
+- **Timestamps are shown in UTC**, because they are rendered on the server.
+
 ### Code organisation
 
 Apps are organised by feature rather than by technical layer:
@@ -242,12 +310,16 @@ apps/api/src/
   modules/health/               health.routes.ts + tests
   modules/auth/                 auth.routes.ts, session.ts, password.ts + tests
   modules/workspaces/           workspace.routes.ts, workspace.access.ts, slug.ts + tests
+  modules/folders/              folder.routes.ts + tests
+  modules/documents/            document.routes.ts + tests
   test/                         test database setup and app factory
 
 apps/web/src/
   proxy.ts                      forwards /api/v1/*, optimistic redirect for signed-in pages
   app/                          /, (auth)/login, (auth)/register,
-                                (app)/dashboard, (app)/w/[slug], (app)/w/[slug]/settings, (app)/account
+                                (app)/dashboard, (app)/account,
+                                (app)/w/[slug], .../settings, .../documents, .../folders/[folderId],
+                                (app)/documents/[documentId]
   components/                   shared building blocks (form field, page header, empty state)
   components/ui/                shadcn/ui components
   config/env.ts                 server-only env validation
@@ -255,6 +327,7 @@ apps/web/src/
   features/auth/                forms, session lookup, logout button
   features/dashboard/           app shell: sidebar, switcher, search, user menu, skeletons
   features/workspaces/          data loading, create/rename/delete, lists, settings
+  features/documents/           data loading, document browser, document page, rename/move/delete, folders
   features/system-status/       health fetch + status component
 ```
 
@@ -281,8 +354,8 @@ a dedicated test database, without opening a port.
   (git-ignored) and compiled into the package's `dist`.
 - Tables: `users` (unique lower-cased email, Argon2id password hash),
   `sessions` (unique token hash, expiry, foreign key to `users` with
-  `ON DELETE CASCADE`), `workspaces` (unique slug) and `workspace_members`
-  (composite primary key, role enum). Ids are UUIDv7.
+  `ON DELETE CASCADE`), `workspaces` (unique slug), `workspace_members`
+  (composite primary key, role enum), `folders` and `documents`. Ids are UUIDv7.
 - Integration tests use a separate `<database>_test` database, created and
   migrated on demand by `setupTestDatabase()` (`@syncspace/database/testing`).
 
@@ -322,7 +395,7 @@ The following is intended direction for later phases. None of it is built.
 | ----------------- | ---------------------------------------------------------------------------------------------- |
 | Account features  | Email verification, password reset, session management ("log out everywhere").                 |
 | Membership        | Invitations, role changes, removing members, ownership transfer.                               |
-| Documents         | Document metadata and content stored in PostgreSQL through `@syncspace/database`.              |
+| Document content  | An editor on the document page and content storage in PostgreSQL.                              |
 | Real-time editing | The collaboration service accepts WebSocket connections and synchronises document state between clients. The sync approach (e.g. CRDT-based) is still to be decided. |
 | Sharing           | Document-level access and share links.                                                         |
 | Deployment        | Container images per app and a deployment pipeline.                                            |
