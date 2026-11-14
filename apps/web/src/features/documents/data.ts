@@ -2,11 +2,15 @@ import "server-only";
 
 import {
   documentListResponseSchema,
+  documentPermissionListResponseSchema,
   documentResponseSchema,
   folderListResponseSchema,
+  sharedDocumentListResponseSchema,
   type DocumentDetail,
+  type DocumentPermissionSummary,
   type DocumentSummary,
   type FolderSummary,
+  type SharedDocumentSummary,
 } from "@syncspace/shared";
 import { cache } from "react";
 
@@ -48,3 +52,20 @@ export const getDocument = cache(async (documentId: string): Promise<DocumentDet
   const data = await apiGet(`/documents/${encodeURIComponent(documentId)}`, documentResponseSchema);
   return data?.document ?? null;
 });
+
+/** The people a document was shared with directly. Null if the document is not accessible. */
+export async function listDocumentPermissions(
+  documentId: string,
+): Promise<DocumentPermissionSummary[] | null> {
+  const data = await apiGet(
+    `/documents/${encodeURIComponent(documentId)}/permissions`,
+    documentPermissionListResponseSchema,
+  );
+  return data?.permissions ?? null;
+}
+
+/** Documents shared with the user from workspaces they are not a member of. */
+export async function listSharedDocuments(): Promise<SharedDocumentSummary[]> {
+  const data = await apiGet("/documents/shared", sharedDocumentListResponseSchema);
+  return data?.documents ?? [];
+}

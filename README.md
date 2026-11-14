@@ -2,10 +2,11 @@
 
 A collaborative document workspace, built as a pnpm monorepo.
 
-> **Status: Phase 5 — real-time collaborative editor.** Users can register
-> and log in, manage workspaces, organise documents in nested folders, and
-> edit documents together in real time with live cursors. Member invitations,
-> sharing, comments and version history are **not implemented**. See [docs/architecture.md](docs/architecture.md)
+> **Status: Phase 6 — document sharing and permissions.** Users can register
+> and log in, manage workspaces, organise documents in nested folders, edit
+> them together in real time, and share individual documents with other
+> registered users as owner, editor or viewer. Workspace invitations, public
+> links, comments and version history are **not implemented**. See [docs/architecture.md](docs/architecture.md)
 > for what exists today and what is planned.
 
 ## Tech stack
@@ -166,6 +167,8 @@ caller may not see answers `404`.
 Workspaces are addressed by their slug, as in the workspace routes; documents
 and folders by id.
 
+- Renaming needs the editor role on the document, deleting the owner role,
+  and moving an editing role in the workspace as well.
 - **Soft delete** sets `deleted_at`. The row stays in the database, but the
   document disappears from every endpoint. There is no trash or restore yet.
 - **Folders** can be nested and are created in place; they cannot be renamed,
@@ -174,6 +177,43 @@ and folders by id.
   validates this, and a composite foreign key in the database enforces it.
 - Document **content** is not part of this REST API. It is synchronised by
   the collaboration service (next section).
+
+## Sharing and permissions
+
+A document can be shared with any registered user by email, from the **Share**
+button on the document page. Three document roles exist:
+
+| Role   | Read | Edit content and title | Share, change roles, remove people | Delete |
+| ------ | ---- | ---------------------- | ---------------------------------- | ------ |
+| Owner  | yes  | yes                    | yes                                | yes    |
+| Editor | yes  | yes                    | no                                 | no     |
+| Viewer | yes  | no                     | no                                 | no     |
+
+A user's **effective role** for a document is the higher of:
+
+- what their workspace role implies (workspace owner/admin → owner,
+  member → editor, viewer → viewer), and
+- a role granted on that document by sharing.
+
+The person who creates a document becomes its owner. People outside the
+workspace who are given access see only that document, under **Shared with
+me**; they cannot see the workspace, its other documents or its folders.
+
+| Method | Route                                        | Who                | Description                                                 |
+| ------ | -------------------------------------------- | ------------------ | ----------------------------------------------------------- |
+| GET    | `/api/v1/documents/shared`                   | signed-in user     | Documents shared with you from other workspaces             |
+| GET    | `/api/v1/documents/:id/permissions`          | anyone with access | People the document is shared with (emails only for owners) |
+| POST   | `/api/v1/documents/:id/permissions`          | owner              | Share by `email` with a `role`, or change an existing grant |
+| PATCH  | `/api/v1/documents/:id/permissions/:userId`  | owner              | Change a collaborator's role                                |
+| DELETE | `/api/v1/documents/:id/permissions/:userId`  | owner              | Remove a collaborator                                       |
+
+The same rule is enforced on REST requests and on editor connections. A
+change of role or a removal reaches a user who has the document open within
+`COLLABORATION_ACCESS_RECHECK_SECONDS` (30 s by default), without them
+logging in again. There are no public or anonymous links.
+
+The full model and its limitations are in
+[docs/architecture.md](docs/architecture.md#authorization-model).
 
 ## Collaborative editor
 
@@ -202,9 +242,8 @@ accounts that are members of the workspace) to see it.
   | View only    | Your role is Viewer: you see live updates but cannot edit               |
   | No access    | The server refused access (removed from the workspace, document deleted) |
 
-- **Permissions:** owners, admins and members can edit. The `VIEWER` role is
-  read-only, enforced on the server. Like the other non-owner roles it can
-  only be assigned directly in the database for now.
+- **Permissions:** owners and editors of a document can edit; viewers are
+  read-only, enforced on the server (see "Sharing and permissions").
 
 `POST /api/v1/documents/:id/collaboration-token` is the only REST endpoint
 involved: it gives a signed-in member a 60-second token for opening the
@@ -265,7 +304,7 @@ The Prisma schema lives in `packages/database/prisma/schema.prisma`.
 3. Commit the migration.
 
 Current tables: `users`, `sessions`, `workspaces`, `workspace_members`,
-`folders`, `documents` and `document_contents`. The first migration is an intentional
+`folders`, `documents`, `document_contents` and `document_permissions`. The first migration is an intentional
 empty baseline that establishes the migration history.
 
 ## Testing
@@ -288,8 +327,11 @@ with the API tests).
 - `apps/collaboration` — two real WebSocket clients against a real server and
   PostgreSQL: convergence of concurrent edits, presence cleanup, persistence
   and recovery after a restart, reconnection, rejected connections, read-only
-  viewers, and access revocation
-- `apps/api` also covers the collaboration token endpoint and the viewer role
+  viewers (including hand-built update frames sent directly on the WebSocket),
+  and role changes and revocation for users who are already connected
+- `apps/api` also covers the collaboration token endpoint, the viewer role, and
+  sharing: who may share, effective roles, revocation and privilege-escalation
+  attempts
 - `packages/database` — connection, unique-constraint, cascade,
   transaction-rollback and cross-workspace integrity tests
 - `packages/shared` — schema and env validation helper tests

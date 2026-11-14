@@ -66,7 +66,7 @@ export function WorkspaceOverview({ workspace, recentDocuments, folders }: Works
             documents={recentDocuments}
             folders={folders}
             showLocation
-            canEdit={canEditDocuments(workspace.role)}
+            canOrganize={canEditDocuments(workspace.role)}
           />
         ) : (
           <EmptyState

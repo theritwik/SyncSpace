@@ -28,6 +28,7 @@ export function createTestApp(overrides: TestAppOverrides = {}): {
       sessionTtlDays: 7,
       trustProxy: false,
       collaborationTokenSecret: TEST_COLLABORATION_TOKEN_SECRET,
+      shareRateLimitMax: 1000,
       ...overrides.config,
       // High limits by default so ordinary tests never trip the rate limiter.
       rateLimits: {

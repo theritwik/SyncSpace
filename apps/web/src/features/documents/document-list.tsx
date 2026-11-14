@@ -1,4 +1,9 @@
-import type { DocumentSummary, FolderSummary } from "@syncspace/shared";
+import {
+  canDeleteDocument,
+  canEditDocument,
+  type DocumentSummary,
+  type FolderSummary,
+} from "@syncspace/shared";
 import { FileTextIcon } from "lucide-react";
 import Link from "next/link";
 
@@ -12,15 +17,15 @@ interface DocumentListProps {
   folders: FolderSummary[];
   /** Show which folder each document is in (for lists that span folders). */
   showLocation?: boolean;
-  /** Whether the user may rename, move and delete (false for viewers). */
-  canEdit: boolean;
+  /** Whether the user's workspace role allows organising documents (moving them). */
+  canOrganize: boolean;
 }
 
 export function DocumentList({
   documents,
   folders,
   showLocation = false,
-  canEdit,
+  canOrganize,
 }: DocumentListProps) {
   const folderNames = new Map(folders.map((folder) => [folder.id, folder.name]));
 
@@ -44,12 +49,16 @@ export function DocumentList({
                 {document.createdBy ? ` · Created by ${document.createdBy.name}` : null}
               </p>
             </div>
-            {canEdit ? (
-              <DocumentActions
-                document={{ id: document.id, title: document.title, folderId: document.folderId }}
-                folders={folders}
-              />
-            ) : null}
+            <DocumentActions
+              document={{ id: document.id, title: document.title, folderId: document.folderId }}
+              folders={folders}
+              // Per document: the role can differ from one document to the next.
+              can={{
+                rename: canEditDocument(document.role),
+                move: canOrganize && canEditDocument(document.role),
+                delete: canDeleteDocument(document.role),
+              }}
+            />
           </li>
         );
       })}

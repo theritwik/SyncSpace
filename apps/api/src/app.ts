@@ -10,6 +10,7 @@ import { collaborationRoutes } from "./modules/collaboration/collaboration.route
 import { documentRoutes } from "./modules/documents/document.routes.js";
 import { folderRoutes } from "./modules/folders/folder.routes.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
+import { sharingRoutes } from "./modules/sharing/sharing.routes.js";
 import { workspaceRoutes } from "./modules/workspaces/workspace.routes.js";
 
 const MINUTE_MS = 60_000;
@@ -24,6 +25,8 @@ export interface AppConfig {
   trustProxy: boolean;
   /** Signs the tokens that let browsers connect to the collaboration service. */
   collaborationTokenSecret: string;
+  /** Share requests allowed per client IP per hour (default 60). */
+  shareRateLimitMax?: number;
   /** Overrides for the default limits (used by tests). */
   rateLimits?: Partial<AuthRateLimits>;
 }
@@ -72,6 +75,11 @@ export function buildApp({
   app.register(workspaceRoutes, { prefix: "/api/v1/workspaces", db: database });
   app.register(folderRoutes, { prefix: "/api/v1", db: database });
   app.register(documentRoutes, { prefix: "/api/v1", db: database });
+  app.register(sharingRoutes, {
+    prefix: "/api/v1",
+    db: database,
+    shareRateLimit: { max: config.shareRateLimitMax ?? 60, windowMs: 60 * MINUTE_MS },
+  });
   app.register(collaborationRoutes, {
     prefix: "/api/v1",
     db: database,

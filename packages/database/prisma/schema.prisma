@@ -24,10 +24,12 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  sessions         Session[]
-  memberships      WorkspaceMember[]
-  createdFolders   Folder[]
-  createdDocuments Document[]
+  sessions                   Session[]
+  memberships                WorkspaceMember[]
+  createdFolders             Folder[]
+  createdDocuments           Document[]
+  documentPermissions        DocumentPermission[]
+  grantedDocumentPermissions DocumentPermission[] @relation("PermissionGrantedBy")
 
   @@map("users")
 }
@@ -104,12 +106,12 @@ model Folder {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // The parent is referenced by (id, workspace) rather than id alone. The
   // database therefore refuses a parent that lives in another workspace.
-  parent    Folder?   @relation("FolderTree", fields: [parentId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
-  children  Folder[]  @relation("FolderTree")
-  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  parent    Folder?    @relation("FolderTree", fields: [parentId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  children  Folder[]   @relation("FolderTree")
+  createdBy User?      @relation(fields: [createdById], references: [id], onDelete: SetNull)
   documents Document[]
 
   // Target of the composite foreign keys above and in Document.
@@ -131,12 +133,13 @@ model Document {
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // Same technique as Folder.parent: a document can only be placed in a
   // folder of its own workspace.
-  folder    Folder?   @relation(fields: [folderId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
-  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  content   DocumentContent?
+  folder      Folder?              @relation(fields: [folderId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  createdBy   User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  content     DocumentContent?
+  permissions DocumentPermission[]
 
   // Serves "documents of a workspace, most recently updated first".
   @@index([workspaceId, deletedAt, updatedAt(sort: Desc)])
@@ -158,4 +161,41 @@ model DocumentContent {
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@map("document_contents")
+}
+
+enum DocumentRole {
+  /// Everything an editor can do, plus sharing and deleting the document.
+  OWNER
+  /// Read and change the document.
+  EDITOR
+  /// Read only.
+  VIEWER
+
+  @@map("document_role")
+}
+
+/// A grant: "this user has this role on this document". It is how a document
+/// is shared with a specific person, including people outside the workspace.
+///
+/// Workspace members also have access through their workspace role without
+/// any row here; the effective role is the higher of the two (see
+/// resolveDocumentRole in @syncspace/shared).
+model DocumentPermission {
+  documentId  String       @map("document_id") @db.Uuid
+  userId      String       @map("user_id") @db.Uuid
+  role        DocumentRole
+  /// Who shared the document. Kept as null if that user is deleted later.
+  grantedById String?      @map("granted_by_id") @db.Uuid
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  document  Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User?    @relation("PermissionGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  // One grant per user and document.
+  @@id([documentId, userId])
+  // Serves "documents shared with this user".
+  @@index([userId])
+  @@map("document_permissions")
 }

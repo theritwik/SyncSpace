@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { documentRoleSchema } from "./document-permissions.js";
+
 export const DOCUMENT_TITLE_MAX_LENGTH = 120;
 export const DEFAULT_DOCUMENT_TITLE = "Untitled document";
 export const FOLDER_NAME_MAX_LENGTH = 60;
@@ -61,6 +63,8 @@ export const documentSchema = z.object({
   workspaceId: z.uuid(),
   folderId: z.uuid().nullable(),
   title: z.string(),
+  /** The requesting user's effective role for this document. */
+  role: documentRoleSchema,
   /** Null when the creating user no longer exists. */
   createdBy: z.object({ id: z.uuid(), name: z.string() }).nullable(),
   createdAt: z.iso.datetime(),
@@ -69,8 +73,19 @@ export const documentSchema = z.object({
 
 /** A single document with what a page needs to show where it lives. */
 export const documentDetailSchema = documentSchema.extend({
-  /** Whether the requesting user may change the document (false for viewers). */
+  /** Whether the requesting user may change the title and content (false for viewers). */
   canEdit: z.boolean(),
+  /** Whether they may move it to another folder (needs an editing role in the workspace too). */
+  canMove: z.boolean(),
+  canDelete: z.boolean(),
+  /** Whether they may share it and manage collaborators. */
+  canShare: z.boolean(),
+  /**
+   * Whether the requesting user is a member of the document's workspace.
+   * False for people the document was shared with from outside; they do not
+   * get to see the workspace's folder structure (`folderPath` is empty).
+   */
+  isWorkspaceMember: z.boolean(),
   workspace: z.object({ id: z.uuid(), name: z.string(), slug: z.string() }),
   /** Folders from the top level down to the one containing the document. Empty at the top level. */
   folderPath: z.array(z.object({ id: z.uuid(), name: z.string() })),
