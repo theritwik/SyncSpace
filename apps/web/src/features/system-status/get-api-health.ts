@@ -12,9 +12,8 @@ export type ApiHealthResult =
 
 /** Fetches the API health endpoint. Never cached: it reflects the current state. */
 export async function getApiHealth(): Promise<ApiHealthResult> {
-  const { API_URL } = getServerEnv();
-
   try {
+    const { API_URL } = getServerEnv();
     const response = await fetch(new URL("/api/v1/health", API_URL), {
       cache: "no-store",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
