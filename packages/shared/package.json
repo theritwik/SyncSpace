@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./collaboration-token": {
+      "types": "./dist/collaboration-token.d.ts",
+      "default": "./dist/collaboration-token.js"
     }
   },
   "files": ["dist"],

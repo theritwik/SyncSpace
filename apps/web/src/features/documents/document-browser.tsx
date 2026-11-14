@@ -1,4 +1,5 @@
 import {
+  canEditDocuments,
   getFolderPath,
   MAX_FOLDER_DEPTH,
   type DocumentSummary,
@@ -37,6 +38,8 @@ export function DocumentBrowser({
   const folderPath = getFolderPath(folders, currentFolderId);
   const subfolders = folders.filter((folder) => folder.parentId === currentFolderId);
   const canNestDeeper = folderPath.length < MAX_FOLDER_DEPTH;
+  // The API enforces this; here it only decides which controls to show.
+  const canEdit = canEditDocuments(workspace.role);
 
   const breadcrumbs: Breadcrumb[] = [
     { label: workspace.name, href: `/w/${workspace.slug}` },
@@ -56,16 +59,18 @@ export function DocumentBrowser({
           currentFolder ? undefined : `Everything in the “${workspace.name}” workspace.`
         }
         actions={
-          <div className="flex flex-wrap items-start gap-2">
-            {canNestDeeper ? (
-              <NewFolderButton
-                workspaceSlug={workspace.slug}
-                parentId={currentFolderId}
-                parentName={currentFolder?.name}
-              />
-            ) : null}
-            <NewDocumentButton workspaceSlug={workspace.slug} folderId={currentFolderId} />
-          </div>
+          canEdit ? (
+            <div className="flex flex-wrap items-start gap-2">
+              {canNestDeeper ? (
+                <NewFolderButton
+                  workspaceSlug={workspace.slug}
+                  parentId={currentFolderId}
+                  parentName={currentFolder?.name}
+                />
+              ) : null}
+              <NewDocumentButton workspaceSlug={workspace.slug} folderId={currentFolderId} />
+            </div>
+          ) : null
         }
       />
 
@@ -95,7 +100,7 @@ export function DocumentBrowser({
           <h2 id="documents-heading" className="text-sm font-medium text-muted-foreground">
             Documents
           </h2>
-          <DocumentList documents={documents} folders={folders} />
+          <DocumentList documents={documents} folders={folders} canEdit={canEdit} />
         </section>
       ) : subfolders.length > 0 ? (
         <p className="text-sm text-muted-foreground">
@@ -107,13 +112,21 @@ export function DocumentBrowser({
         <EmptyState
           icon={FolderOpenIcon}
           title="This folder is empty"
-          description="Create a document here, or move an existing document into this folder."
+          description={
+            canEdit
+              ? "Create a document here, or move an existing document into this folder."
+              : "There is nothing in this folder yet."
+          }
         />
       ) : (
         <EmptyState
           icon={FileTextIcon}
           title="No documents yet"
-          description="Create the first document of this workspace, or a folder to organise documents in."
+          description={
+            canEdit
+              ? "Create the first document of this workspace, or a folder to organise documents in."
+              : "Nobody has created a document in this workspace yet."
+          }
         />
       )}
     </div>

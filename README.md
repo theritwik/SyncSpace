@@ -2,10 +2,10 @@
 
 A collaborative document workspace, built as a pnpm monorepo.
 
-> **Status: Phase 4 — documents and folders.** Users can register and log in,
-> manage workspaces, and create, rename, move and delete documents organised
-> in nested folders. Documents have no content yet: the editor, real-time
-> sync, member invitations and sharing are **not implemented**. See [docs/architecture.md](docs/architecture.md)
+> **Status: Phase 5 — real-time collaborative editor.** Users can register
+> and log in, manage workspaces, organise documents in nested folders, and
+> edit documents together in real time with live cursors. Member invitations,
+> sharing, comments and version history are **not implemented**. See [docs/architecture.md](docs/architecture.md)
 > for what exists today and what is planned.
 
 ## Tech stack
@@ -15,6 +15,7 @@ A collaborative document workspace, built as a pnpm monorepo.
 | Web        | Next.js 16 (App Router), React 19, Tailwind CSS 4, shadcn/ui |
 | API        | Node.js 24 LTS, Fastify 5                                  |
 | Auth       | Argon2id password hashing, database-backed sessions in HttpOnly cookies |
+| Editor     | Tiptap 3, Yjs (CRDT), Hocuspocus 4 over WebSockets, content stored in PostgreSQL |
 | Database   | PostgreSQL 17, Prisma 7 (`@prisma/adapter-pg`)             |
 | Validation | Zod 4                                                      |
 | Tooling    | pnpm workspaces, TypeScript 6 (strict), ESLint, Vitest     |
@@ -26,7 +27,7 @@ A collaborative document workspace, built as a pnpm monorepo.
 apps/
   web/            Next.js frontend
   api/            Fastify REST API
-  collaboration/  Collaboration service (liveness endpoint only for now)
+  collaboration/  Real-time collaboration server (Hocuspocus/Yjs over WebSockets)
 packages/
   database/       Prisma schema, migrations and database client
   shared/         Code shared across apps (env validation, API contracts, Zod schemas)
@@ -171,8 +172,43 @@ and folders by id.
   moved or deleted yet.
 - A document can only be placed in a folder of its own workspace. The API
   validates this, and a composite foreign key in the database enforces it.
-- **Documents have no content.** The document page shows the title (editable
-  in place), metadata and an empty state where the editor will go.
+- Document **content** is not part of this REST API. It is synchronised by
+  the collaboration service (next section).
+
+## Collaborative editor
+
+Open a document at `/documents/<documentId>` in two browsers (two different
+accounts that are members of the workspace) to see it.
+
+- **Editing:** headings, bold, italic, underline, strikethrough, inline code,
+  bulleted and numbered lists, quotes, code blocks, undo/redo (undo only
+  reverts your own changes).
+- **Real time:** edits appear in other browsers as they are typed. Concurrent
+  edits are merged by Yjs, a CRDT, so all clients end up with the same text.
+- **Presence:** avatars of the people in the document and their live cursors,
+  each person with a stable colour.
+- **Persistence:** the collaboration service stores the document in
+  PostgreSQL about 2 seconds after the last change (at most 10 seconds while
+  typing continues), and again on shutdown.
+- **Status line** above the editor, each state meaning exactly what it says:
+
+  | Status       | Meaning                                                                 |
+  | ------------ | ----------------------------------------------------------------------- |
+  | Connecting…  | The document has not been loaded yet                                    |
+  | Syncing…     | Connected; the server has not acknowledged all your edits               |
+  | Saving…      | The server has your edits; not all are in the database yet              |
+  | Saved        | Your copy is identical to what the server wrote to the database         |
+  | Offline      | No connection; recent edits exist only in this browser tab              |
+  | View only    | Your role is Viewer: you see live updates but cannot edit               |
+  | No access    | The server refused access (removed from the workspace, document deleted) |
+
+- **Permissions:** owners, admins and members can edit. The `VIEWER` role is
+  read-only, enforced on the server. Like the other non-owner roles it can
+  only be assigned directly in the database for now.
+
+`POST /api/v1/documents/:id/collaboration-token` is the only REST endpoint
+involved: it gives a signed-in member a 60-second token for opening the
+WebSocket connection.
 
 ## Scripts
 
@@ -212,6 +248,9 @@ if any are missing or malformed.
 | `SESSION_TTL_DAYS`                                                    | API            | Session lifetime in days (default `7`)       |
 | `TRUST_PROXY`                                                         | API            | Read the client IP from `X-Forwarded-For` (default `false`). Enable only when the API is reachable solely through a trusted proxy. |
 | `COLLABORATION_HOST`, `COLLABORATION_PORT`                            | Collaboration  | Listen address (default `0.0.0.0:4001`)      |
+| `COLLABORATION_TOKEN_SECRET`                                          | API, Collaboration | Shared key for signing/verifying editor connection tokens (required, min. 32 characters) |
+| `COLLABORATION_ACCESS_RECHECK_SECONDS`                                | Collaboration  | How often open connections are re-checked against the database (default `30`) |
+| `COLLABORATION_URL`                                                   | Web (server)   | WebSocket URL of the collaboration service as the browser reaches it (required for the editor) |
 | `API_URL`                                                             | Web (server)   | Base URL of the API; `/api/v1/*` is forwarded to it (required) |
 
 The credentials in `.env.example` are for local development only.
@@ -226,7 +265,7 @@ The Prisma schema lives in `packages/database/prisma/schema.prisma`.
 3. Commit the migration.
 
 Current tables: `users`, `sessions`, `workspaces`, `workspace_members`,
-`folders` and `documents`. The first migration is an intentional
+`folders`, `documents` and `document_contents`. The first migration is an intentional
 empty baseline that establishes the migration history.
 
 ## Testing
@@ -238,13 +277,19 @@ pnpm test
 
 Integration tests never touch development data. Before they run, a separate
 `<database>_test` database (for example `syncspace_test`) is created on the
-same PostgreSQL server and migrated automatically.
+same PostgreSQL server and migrated automatically (the collaboration tests
+use their own, `<database>_test_collaboration`, because they run in parallel
+with the API tests).
 
 - `apps/api` — auth, workspace, document and folder (access control, validation,
   soft delete) and health route
   tests against the real app, real PostgreSQL and real Argon2 hashing (requests
   sent in-process with `fastify.inject`), plus env validation tests
-- `apps/collaboration` — liveness endpoint tests against a real HTTP server
+- `apps/collaboration` — two real WebSocket clients against a real server and
+  PostgreSQL: convergence of concurrent edits, presence cleanup, persistence
+  and recovery after a restart, reconnection, rejected connections, read-only
+  viewers, and access revocation
+- `apps/api` also covers the collaboration token endpoint and the viewer role
 - `packages/database` — connection, unique-constraint, cascade,
   transaction-rollback and cross-workspace integrity tests
 - `packages/shared` — schema and env validation helper tests

@@ -10,7 +10,14 @@
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
+    "@hocuspocus/provider": "^4.8.0",
     "@syncspace/shared": "workspace:*",
+    "@tiptap/extension-collaboration": "^3.34.0",
+    "@tiptap/extension-collaboration-caret": "^3.34.0",
+    "@tiptap/pm": "^3.34.0",
+    "@tiptap/react": "^3.34.0",
+    "@tiptap/starter-kit": "^3.34.0",
+    "@tiptap/y-tiptap": "^3.3.0",
     "class-variance-authority": "^0.7.1",
     "cmdk": "^1.1.1",
     "cn": "^0.5.2",
@@ -20,6 +27,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "^0.0.1",
+    "yjs": "^13.6.33",
     "zod": "^4.6.7"
   },
   "devDependencies": {

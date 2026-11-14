@@ -54,6 +54,8 @@ enum WorkspaceRole {
   ADMIN
   /// Can view the workspace and work with its folders and documents.
   MEMBER
+  /// Can only read: sees folders and documents but cannot change them.
+  VIEWER
 
   @@map("workspace_role")
 }
@@ -134,9 +136,26 @@ model Document {
   // folder of its own workspace.
   folder    Folder?   @relation(fields: [folderId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
   createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  content   DocumentContent?
 
   // Serves "documents of a workspace, most recently updated first".
   @@index([workspaceId, deletedAt, updatedAt(sort: Desc)])
   @@index([folderId, workspaceId])
   @@map("documents")
+}
+
+/// The text of a document, stored as the binary state of its Yjs document
+/// (a CRDT). It is written only by the collaboration server.
+///
+/// It lives in its own table so that listing documents never loads these
+/// potentially large values.
+model DocumentContent {
+  documentId String   @id @map("document_id") @db.Uuid
+  /// Result of Y.encodeStateAsUpdate: the complete document, mergeable with any other copy.
+  state      Bytes
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_contents")
 }

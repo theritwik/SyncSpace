@@ -5,6 +5,7 @@ import { loadEnv } from "./env.js";
 const required = {
   DATABASE_URL: "postgresql://user:pass@localhost:5432/syncspace",
   WEB_ORIGIN: "http://localhost:3000",
+  COLLABORATION_TOKEN_SECRET: "test-secret-test-secret-test-secret-1234",
 };
 
 describe("loadEnv", () => {
@@ -27,6 +28,12 @@ describe("loadEnv", () => {
 
   it("rejects missing required variables", () => {
     expect(() => loadEnv({})).toThrowError(/DATABASE_URL[\s\S]*WEB_ORIGIN/);
+  });
+
+  it("rejects a collaboration token secret that is too short", () => {
+    expect(() => loadEnv({ ...required, COLLABORATION_TOKEN_SECRET: "short" })).toThrowError(
+      /COLLABORATION_TOKEN_SECRET/,
+    );
   });
 
   it("rejects a non-PostgreSQL DATABASE_URL and an out-of-range port", () => {

@@ -1,4 +1,5 @@
 import {
+  canEditDocuments,
   canManageWorkspace,
   type DocumentSummary,
   type FolderSummary,
@@ -39,7 +40,9 @@ export function WorkspaceOverview({ workspace, recentDocuments, folders }: Works
                 {canManageWorkspace(workspace.role) ? "Settings" : "View settings"}
               </Link>
             </Button>
-            <NewDocumentButton workspaceSlug={workspace.slug} folderId={null} />
+            {canEditDocuments(workspace.role) ? (
+              <NewDocumentButton workspaceSlug={workspace.slug} folderId={null} />
+            ) : null}
           </div>
         }
       />
@@ -59,7 +62,12 @@ export function WorkspaceOverview({ workspace, recentDocuments, folders }: Works
           ) : null}
         </div>
         {recentDocuments.length > 0 ? (
-          <DocumentList documents={recentDocuments} folders={folders} showLocation />
+          <DocumentList
+            documents={recentDocuments}
+            folders={folders}
+            showLocation
+            canEdit={canEditDocuments(workspace.role)}
+          />
         ) : (
           <EmptyState
             icon={FileTextIcon}

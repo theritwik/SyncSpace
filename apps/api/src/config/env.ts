@@ -11,6 +11,9 @@ const envSchema = z.object({
   // from any other browser origin are rejected.
   WEB_ORIGIN: z.url({ protocol: /^https?$/ }).transform((value) => new URL(value).origin),
   SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+  // Shared with the collaboration service, which uses it to verify the tokens
+  // this API issues for opening document connections.
+  COLLABORATION_TOKEN_SECRET: z.string().min(32, "Must be at least 32 characters."),
   // Enable only when the API is reachable exclusively through a reverse proxy
   // (the web app). It makes Fastify read the client IP from X-Forwarded-For.
   TRUST_PROXY: z.stringbool().default(false),

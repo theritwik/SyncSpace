@@ -13,6 +13,7 @@ const app = buildApp({
     secureCookies: env.NODE_ENV === "production",
     sessionTtlDays: env.SESSION_TTL_DAYS,
     trustProxy: env.TRUST_PROXY,
+    collaborationTokenSecret: env.COLLABORATION_TOKEN_SECRET,
   },
   logger: {
     level: env.LOG_LEVEL,
