@@ -1,20 +1,18 @@
-import { apiHealthResponseSchema } from "@syncspace/shared";
+import { apiErrorResponseSchema, apiHealthResponseSchema } from "@syncspace/shared";
+import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildApp } from "../../app.js";
+import { createTestApp } from "../../test/test-app.js";
 
-// Route-level tests: the database probe is injected so both outcomes can be
-// exercised without a running PostgreSQL. The real probe is covered by the
-// integration tests in @syncspace/database.
 describe("GET /api/v1/health", () => {
-  let app: ReturnType<typeof buildApp>;
+  let app: FastifyInstance;
 
   afterEach(async () => {
     await app.close();
   });
 
   it("returns 200 and status ok when the database is reachable", async () => {
-    app = buildApp({ checkDatabase: async () => {} });
+    ({ app } = createTestApp());
 
     const response = await app.inject({ method: "GET", url: "/api/v1/health" });
 
@@ -25,11 +23,12 @@ describe("GET /api/v1/health", () => {
   });
 
   it("returns 503 and status degraded when the database is unreachable", async () => {
-    app = buildApp({
+    // The probe is replaced to simulate an outage without stopping PostgreSQL.
+    ({ app } = createTestApp({
       checkDatabase: async () => {
         throw new Error("connection refused");
       },
-    });
+    }));
 
     const response = await app.inject({ method: "GET", url: "/api/v1/health" });
 
@@ -38,11 +37,12 @@ describe("GET /api/v1/health", () => {
     expect(body).toMatchObject({ status: "degraded", checks: { database: "down" } });
   });
 
-  it("returns 404 for unknown routes", async () => {
-    app = buildApp({ checkDatabase: async () => {} });
+  it("returns the standard error shape for unknown routes", async () => {
+    ({ app } = createTestApp());
 
     const response = await app.inject({ method: "GET", url: "/api/v1/unknown" });
 
     expect(response.statusCode).toBe(404);
+    expect(apiErrorResponseSchema.parse(response.json()).error.code).toBe("NOT_FOUND");
   });
 });

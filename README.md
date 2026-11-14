@@ -2,10 +2,9 @@
 
 A collaborative document workspace, built as a pnpm monorepo.
 
-> **Status: Phase 1 — project foundation.** The repository contains the
-> application skeleton, tooling and infrastructure. Product features
-> (authentication, workspaces, the document editor, real-time sync, sharing)
-> are **not implemented yet**. See [docs/architecture.md](docs/architecture.md)
+> **Status: Phase 2 — authentication.** Users can register, log in and log
+> out, and the web app has a protected account page. Workspaces, the document
+> editor, real-time sync and sharing are **not implemented yet**. See [docs/architecture.md](docs/architecture.md)
 > for what exists today and what is planned.
 
 ## Tech stack
@@ -14,6 +13,7 @@ A collaborative document workspace, built as a pnpm monorepo.
 | ---------- | ---------------------------------------------------------- |
 | Web        | Next.js 16 (App Router), React 19, Tailwind CSS 4, shadcn/ui |
 | API        | Node.js 24 LTS, Fastify 5                                  |
+| Auth       | Argon2id password hashing, database-backed sessions in HttpOnly cookies |
 | Database   | PostgreSQL 17, Prisma 7 (`@prisma/adapter-pg`)             |
 | Validation | Zod 4                                                      |
 | Tooling    | pnpm workspaces, TypeScript 6 (strict), ESLint, Vitest     |
@@ -28,7 +28,7 @@ apps/
   collaboration/  Collaboration service (liveness endpoint only for now)
 packages/
   database/       Prisma schema, migrations and database client
-  shared/         Code shared across apps (env validation, API contracts)
+  shared/         Code shared across apps (env validation, API contracts, Zod schemas)
 docs/             Architecture documentation
 ```
 
@@ -60,6 +60,9 @@ pnpm dev
 | Service       | URL                                 |
 | ------------- | ----------------------------------- |
 | Web           | http://localhost:3000               |
+| Register      | http://localhost:3000/register      |
+| Log in        | http://localhost:3000/login         |
+| Account (protected) | http://localhost:3000/account |
 | API health    | http://localhost:4000/api/v1/health |
 | Collaboration | http://localhost:4001/health        |
 
@@ -73,6 +76,49 @@ curl http://localhost:4000/api/v1/health
 
 The endpoint responds `200` when the database is reachable and `503` with
 `"status":"degraded"` when it is not.
+
+## Authentication
+
+| Method | Route                   | Description                                             |
+| ------ | ----------------------- | ------------------------------------------------------- |
+| POST   | `/api/v1/auth/register` | Create an account and start a session (`201`)           |
+| POST   | `/api/v1/auth/login`    | Verify credentials and start a session (`200`)          |
+| POST   | `/api/v1/auth/logout`   | Delete the current session and clear the cookie (`204`) |
+| GET    | `/api/v1/auth/me`       | Profile of the signed-in user (`200`, or `401`)         |
+
+The browser calls these routes on the web app's own origin
+(`http://localhost:3000/api/v1/...`); the web app forwards them to the API.
+
+```bash
+# Register (-c stores the session cookie in a file)
+curl -i -c cookies.txt -H 'content-type: application/json' \
+  -d '{"name":"Ada Lovelace","email":"ada@example.com","password":"correct horse battery"}' \
+  http://localhost:4000/api/v1/auth/register
+
+# Who am I? (-b sends the cookie back)
+curl -b cookies.txt http://localhost:4000/api/v1/auth/me
+```
+
+Every error response has the same shape:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Some fields are invalid.",
+    "details": [{ "path": "email", "message": "Enter a valid email address." }]
+  }
+}
+```
+
+Security properties (details in [docs/architecture.md](docs/architecture.md#authentication)):
+
+- Passwords are hashed with Argon2id; plain-text passwords are never stored or logged.
+- The session token lives only in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` in
+  production). Nothing is kept in `localStorage`. The database stores only a hash of the token.
+- CSRF: `SameSite=Lax` plus an `Origin` check on every state-changing request.
+- Login is rate limited per client IP (20 attempts / 15 min) and per account
+  (10 failed attempts / 15 min); registration per IP (10 / hour).
 
 ## Scripts
 
@@ -108,8 +154,11 @@ if any are missing or malformed.
 | `DATABASE_URL`                                                        | API, Prisma    | PostgreSQL connection string (required)      |
 | `API_HOST`, `API_PORT`                                                | API            | Listen address (default `0.0.0.0:4000`)      |
 | `LOG_LEVEL`                                                           | API            | Pino log level (default `info`)              |
+| `WEB_ORIGIN`                                                          | API            | Origin of the web app, used for the CSRF origin check (required) |
+| `SESSION_TTL_DAYS`                                                    | API            | Session lifetime in days (default `7`)       |
+| `TRUST_PROXY`                                                         | API            | Read the client IP from `X-Forwarded-For` (default `false`). Enable only when the API is reachable solely through a trusted proxy. |
 | `COLLABORATION_HOST`, `COLLABORATION_PORT`                            | Collaboration  | Listen address (default `0.0.0.0:4001`)      |
-| `API_URL`                                                             | Web (server)   | Base URL of the API (required)               |
+| `API_URL`                                                             | Web (server)   | Base URL of the API; `/api/v1/*` is forwarded to it (required) |
 
 The credentials in `.env.example` are for local development only.
 
@@ -122,8 +171,8 @@ The Prisma schema lives in `packages/database/prisma/schema.prisma`.
    `packages/database/prisma/migrations`, applies it and regenerates the client.
 3. Commit the migration.
 
-Phase 1 has no domain models. The initial migration is an intentional empty
-baseline that establishes the migration history.
+Current tables: `users` and `sessions`. The first migration is an intentional
+empty baseline that establishes the migration history.
 
 ## Testing
 
@@ -132,10 +181,18 @@ pnpm db:up   # the database integration tests need PostgreSQL
 pnpm test
 ```
 
-- `apps/api` — health route tests (via `fastify.inject`, database probe injected) and env validation tests
+Integration tests never touch development data. Before they run, a separate
+`<database>_test` database (for example `syncspace_test`) is created on the
+same PostgreSQL server and migrated automatically.
+
+- `apps/api` — auth and health route tests against the real app, real PostgreSQL
+  and real Argon2 hashing (requests sent in-process with `fastify.inject`), plus
+  env validation tests
 - `apps/collaboration` — liveness endpoint tests against a real HTTP server
-- `packages/database` — integration tests against the real PostgreSQL instance
-- `packages/shared` — env validation helper tests
+- `packages/database` — connection, unique-constraint and cascade tests
+- `packages/shared` — schema and env validation helper tests
+
+There are no automated browser tests yet.
 
 ## Adding UI components
 

@@ -1,4 +1,4 @@
-import { checkDatabaseConnection, createDatabaseClient } from "@syncspace/database";
+import { createDatabaseClient } from "@syncspace/database";
 
 import { buildApp } from "./app.js";
 import { loadEnv } from "./config/env.js";
@@ -7,8 +7,19 @@ const env = loadEnv();
 const database = createDatabaseClient(env.DATABASE_URL);
 
 const app = buildApp({
-  checkDatabase: () => checkDatabaseConnection(database),
-  logger: { level: env.LOG_LEVEL },
+  database,
+  config: {
+    webOrigin: env.WEB_ORIGIN,
+    secureCookies: env.NODE_ENV === "production",
+    sessionTtlDays: env.SESSION_TTL_DAYS,
+    trustProxy: env.TRUST_PROXY,
+  },
+  logger: {
+    level: env.LOG_LEVEL,
+    // Fastify's default request log contains no headers or bodies. Redaction
+    // is a second line of defence in case a log call ever includes them.
+    redact: ["req.headers.cookie", "req.headers.authorization", 'res.headers["set-cookie"]'],
+  },
 });
 
 app.addHook("onClose", async () => {

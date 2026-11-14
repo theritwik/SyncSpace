@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SyncSpace",
+  title: { default: "SyncSpace", template: "%s · SyncSpace" },
   description: "A collaborative workspace for documents.",
 };
 
