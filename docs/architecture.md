@@ -3,7 +3,7 @@
 This document separates what **exists today** from what is **planned**.
 Anything under "Planned" is a direction, not an implementation.
 
-## Current architecture (Phase 2 — authentication)
+## Current architecture (Phase 3 — workspaces)
 
 ```
                  ┌──────────────────────┐
@@ -17,6 +17,7 @@ Anything under "Planned" is a direction, not an implementation.
                  │  api (Fastify)       │  :4000
                  │  /api/v1/health      │
                  │  /api/v1/auth/*      │
+                 │  /api/v1/workspaces  │
                  └──────────┬───────────┘
                             │ Prisma + node-postgres adapter (DATABASE_URL)
                             ▼
@@ -34,11 +35,11 @@ Anything under "Planned" is a direction, not an implementation.
 
 | Package                    | Responsibility                                                                 |
 | -------------------------- | ------------------------------------------------------------------------------ |
-| `@syncspace/web`           | Next.js App Router frontend: landing page, login, registration, protected account page. |
-| `@syncspace/api`           | Fastify REST API: health check and authentication.                             |
+| `@syncspace/web`           | Next.js App Router frontend: landing page, login, registration, and the signed-in dashboard (workspaces, settings, account). |
+| `@syncspace/api`           | Fastify REST API: health check, authentication and workspaces.                 |
 | `@syncspace/collaboration` | Standalone Node.js HTTP service with a liveness endpoint. No document sync.    |
-| `@syncspace/database`      | Prisma schema (`User`, `Session`), migrations, generated client, test-database helper. |
-| `@syncspace/shared`        | Env validation helper and the API contracts (Zod): auth requests/responses, error shape, health. |
+| `@syncspace/database`      | Prisma schema (`User`, `Session`, `Workspace`, `WorkspaceMember`), migrations, generated client, test-database helper. |
+| `@syncspace/shared`        | Env validation helper, the API contracts (Zod) for auth, workspaces, errors and health, and the role permission rules. |
 
 Dependency direction: `apps → packages`. Packages never import from apps, and
 `shared` has no dependency on `database`.
@@ -150,6 +151,84 @@ answered with a generic `500`.
 - **Sessions do not slide**: a session ends `SESSION_TTL_DAYS` after login
   even if the user is active. There is no "log out everywhere" yet.
 
+## Workspaces
+
+### Data model
+
+```
+users ──< workspace_members >── workspaces
+            role: OWNER | ADMIN | MEMBER
+            primary key (workspace_id, user_id)
+```
+
+A workspace has no owner column. Access is granted only by a row in
+`workspace_members`, so "who can see this workspace" and "what may they do"
+are answered by one table, and adding invitations later needs no schema
+change. Deleting a workspace or a user removes the related memberships
+(`ON DELETE CASCADE`).
+
+Creating a workspace inserts the workspace and its `OWNER` membership inside
+one database transaction, so a workspace can never exist without an owner.
+
+Each workspace has a `slug` used in URLs (`/w/acme-design-k3x9qa`). It is
+generated once from the name plus a random suffix and never changes, so links
+survive a rename.
+
+### Access control
+
+Every workspace route calls `requireWorkspaceAccess()`
+(`apps/api/src/modules/workspaces/workspace.access.ts`), which looks the
+workspace up *through the caller's membership*:
+
+| Situation                          | Response |
+| ---------------------------------- | -------- |
+| No session                         | `401`    |
+| Not a member (or no such workspace)| `404`    |
+| Member, but role too low           | `403`    |
+
+Non-members get `404` rather than `403` so the API does not reveal which
+slugs exist. The permission rules (`canManageWorkspace`, `canDeleteWorkspace`)
+live in `@syncspace/shared`: the API enforces them, and the web app uses the
+same functions only to decide which controls to show.
+
+| Action            | Owner | Admin | Member |
+| ----------------- | ----- | ----- | ------ |
+| View, list members| yes   | yes   | yes    |
+| Rename            | yes   | yes   | no     |
+| Delete            | yes   | no    | no     |
+
+### Dashboard (web)
+
+- `app/(app)/layout.tsx` wraps every signed-in page. It verifies the session,
+  loads the user's workspaces once, and renders the shell: sidebar with
+  workspace switcher and navigation, header with search and user menu.
+- **Reads** happen in server components through `lib/api-server.ts`, which
+  forwards the session cookie to the API. **Writes** are sent by client
+  components through `lib/api-client.ts` (via `proxy.ts`), followed by
+  `router.refresh()` so server-rendered data such as the sidebar is reloaded.
+  There is no client-side state library.
+- The current workspace is derived from the URL, not stored anywhere.
+- Loading states are `loading.tsx` skeletons per page; errors are caught by
+  `error.tsx` boundaries (inside the shell when only a page fails, full-page
+  when the session check itself fails); unknown or inaccessible workspaces
+  render a not-found state.
+- Accessibility: skip link, landmarks, `aria-current` on the active link,
+  focus-managed dialogs and menus (Radix), and a keyboard-driven search
+  dialog (`Ctrl`/`⌘` + `K`).
+
+### Known limitations
+
+- **No invitations or role changes yet.** Non-owner roles can only be created
+  directly in the database (as the integration tests do).
+- **Ownership cannot be transferred**, and there is always exactly one way to
+  remove a workspace: the owner deletes it.
+- **No pagination** of the workspace or member lists, and no limit on how many
+  workspaces a user may create.
+- **Search covers workspaces and pages only**, filtered in the browser from
+  the already-loaded list.
+- **No automated browser tests.** The UI was verified with one-off browser
+  scripts, not a committed suite.
+
 ### Code organisation
 
 Apps are organised by feature rather than by technical layer:
@@ -162,14 +241,20 @@ apps/api/src/
   http/                         error format + handler, CSRF origin check
   modules/health/               health.routes.ts + tests
   modules/auth/                 auth.routes.ts, session.ts, password.ts + tests
+  modules/workspaces/           workspace.routes.ts, workspace.access.ts, slug.ts + tests
   test/                         test database setup and app factory
 
 apps/web/src/
-  proxy.ts                      forwards /api/v1/*, optimistic redirect for /account
-  app/                          routes: /, /login, /register, /account
+  proxy.ts                      forwards /api/v1/*, optimistic redirect for signed-in pages
+  app/                          /, (auth)/login, (auth)/register,
+                                (app)/dashboard, (app)/w/[slug], (app)/w/[slug]/settings, (app)/account
+  components/                   shared building blocks (form field, page header, empty state)
   components/ui/                shadcn/ui components
   config/env.ts                 server-only env validation
+  lib/                          api-server.ts (reads), api-client.ts (writes), formatting helpers
   features/auth/                forms, session lookup, logout button
+  features/dashboard/           app shell: sidebar, switcher, search, user menu, skeletons
+  features/workspaces/          data loading, create/rename/delete, lists, settings
   features/system-status/       health fetch + status component
 ```
 
@@ -194,9 +279,10 @@ a dedicated test database, without opening a port.
   `packages/database/prisma.config.ts`.
 - The generated client is written to `packages/database/src/generated`
   (git-ignored) and compiled into the package's `dist`.
-- Tables: `users` (unique lower-cased email, Argon2id password hash) and
+- Tables: `users` (unique lower-cased email, Argon2id password hash),
   `sessions` (unique token hash, expiry, foreign key to `users` with
-  `ON DELETE CASCADE`). Ids are UUIDv7.
+  `ON DELETE CASCADE`), `workspaces` (unique slug) and `workspace_members`
+  (composite primary key, role enum). Ids are UUIDv7.
 - Integration tests use a separate `<database>_test` database, created and
   migrated on demand by `setupTestDatabase()` (`@syncspace/database/testing`).
 
@@ -235,7 +321,7 @@ The following is intended direction for later phases. None of it is built.
 | Area              | Intent                                                                                         |
 | ----------------- | ---------------------------------------------------------------------------------------------- |
 | Account features  | Email verification, password reset, session management ("log out everywhere").                 |
-| Workspaces        | Workspaces, membership and roles; authorisation enforced in the API.                           |
+| Membership        | Invitations, role changes, removing members, ownership transfer.                               |
 | Documents         | Document metadata and content stored in PostgreSQL through `@syncspace/database`.              |
 | Real-time editing | The collaboration service accepts WebSocket connections and synchronises document state between clients. The sync approach (e.g. CRDT-based) is still to be decided. |
 | Sharing           | Document-level access and share links.                                                         |

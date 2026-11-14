@@ -2,9 +2,9 @@
 
 import { PASSWORD_MIN_LENGTH, registerRequestSchema } from "@syncspace/shared";
 
+import { FormError, FormField } from "@/components/form-field";
 import { Button } from "@/components/ui/button";
 
-import { FormError, FormField } from "./form-field";
 import { useAuthForm } from "./use-auth-form";
 
 export function RegisterForm() {

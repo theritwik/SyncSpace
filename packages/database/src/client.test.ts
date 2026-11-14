@@ -27,6 +27,7 @@ describe("users and sessions schema", () => {
   const userData = { name: "Grace Hopper", email: "grace@example.com", passwordHash: "test-hash" };
 
   beforeEach(async () => {
+    await client.workspace.deleteMany();
     await client.user.deleteMany();
   });
 
@@ -78,5 +79,72 @@ describe("users and sessions schema", () => {
         },
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("workspaces schema", () => {
+  const userData = { name: "Grace Hopper", email: "grace@example.com", passwordHash: "test-hash" };
+
+  beforeEach(async () => {
+    await client.workspace.deleteMany();
+    await client.user.deleteMany();
+  });
+
+  it("allows a user to be a member of a workspace only once", async () => {
+    const user = await client.user.create({ data: userData });
+    const workspace = await client.workspace.create({ data: { name: "Team", slug: "team-1" } });
+    const membership = { workspaceId: workspace.id, userId: user.id };
+    await client.workspaceMember.create({ data: { ...membership, role: "OWNER" } });
+
+    const duplicate = await client.workspaceMember
+      .create({ data: { ...membership, role: "MEMBER" } })
+      .catch((error: unknown) => error);
+
+    expect(isUniqueConstraintError(duplicate)).toBe(true);
+  });
+
+  it("enforces unique slugs", async () => {
+    await client.workspace.create({ data: { name: "Team", slug: "team-1" } });
+
+    const duplicate = await client.workspace
+      .create({ data: { name: "Other", slug: "team-1" } })
+      .catch((error: unknown) => error);
+
+    expect(isUniqueConstraintError(duplicate)).toBe(true);
+  });
+
+  it("removes memberships when a workspace or a user is deleted", async () => {
+    const user = await client.user.create({ data: userData });
+    const first = await client.workspace.create({ data: { name: "First", slug: "first-1" } });
+    const second = await client.workspace.create({ data: { name: "Second", slug: "second-1" } });
+    await client.workspaceMember.createMany({
+      data: [
+        { workspaceId: first.id, userId: user.id, role: "OWNER" },
+        { workspaceId: second.id, userId: user.id, role: "MEMBER" },
+      ],
+    });
+
+    await client.workspace.delete({ where: { id: first.id } });
+    expect(await client.workspaceMember.count()).toBe(1);
+
+    await client.user.delete({ where: { id: user.id } });
+    expect(await client.workspaceMember.count()).toBe(0);
+  });
+
+  it("rolls back the workspace when creating its owner membership fails", async () => {
+    const create = client.$transaction(async (tx) => {
+      const workspace = await tx.workspace.create({ data: { name: "Team", slug: "team-1" } });
+      // No such user: the foreign key rejects this insert.
+      await tx.workspaceMember.create({
+        data: {
+          workspaceId: workspace.id,
+          userId: "00000000-0000-7000-8000-000000000000",
+          role: "OWNER",
+        },
+      });
+    });
+
+    await expect(create).rejects.toThrow();
+    expect(await client.workspace.count()).toBe(0);
   });
 });

@@ -4,7 +4,9 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import type { z } from "zod";
 
-import { sendAuthRequest, type FieldErrors } from "./auth-client";
+import type { FieldErrors } from "@/lib/api-client";
+
+import { sendAuthRequest } from "./auth-client";
 
 /**
  * Shared submit logic of the login and registration forms:
@@ -49,7 +51,7 @@ export function useAuthForm(schema: z.ZodType, path: "/login" | "/register") {
 
     if (result.ok) {
       // Stay in the pending state while the next page loads.
-      router.replace("/account");
+      router.replace("/dashboard");
       router.refresh();
       return;
     }

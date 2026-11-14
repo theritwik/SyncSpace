@@ -3,8 +3,10 @@ import type { ComponentProps } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-interface FormFieldProps extends Omit<ComponentProps<typeof Input>, "id"> {
+interface FormFieldProps extends ComponentProps<typeof Input> {
   name: string;
+  /** Defaults to `name`. Set it when two forms on one page have a field with the same name. */
+  id?: string;
   label: string;
   hint?: string;
   error?: string;
@@ -15,15 +17,15 @@ interface FormFieldProps extends Omit<ComponentProps<typeof Input>, "id"> {
  * The hint and error are linked with `aria-describedby`, so screen readers
  * announce them together with the field.
  */
-export function FormField({ name, label, hint, error, ...inputProps }: FormFieldProps) {
-  const hintId = hint ? `${name}-hint` : undefined;
-  const errorId = error ? `${name}-error` : undefined;
+export function FormField({ name, id = name, label, hint, error, ...inputProps }: FormFieldProps) {
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
 
   return (
     <div className="grid gap-2">
-      <Label htmlFor={name}>{label}</Label>
+      <Label htmlFor={id}>{label}</Label>
       <Input
-        id={name}
+        id={id}
         name={name}
         aria-invalid={error ? true : undefined}
         aria-describedby={[hintId, errorId].filter(Boolean).join(" ") || undefined}

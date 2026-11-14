@@ -7,6 +7,7 @@ import { registerErrorHandlers, tooManyAttempts } from "./http/errors.js";
 import { registerOriginCheck } from "./http/origin-check.js";
 import { authRoutes, type AuthRateLimits } from "./modules/auth/auth.routes.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
+import { workspaceRoutes } from "./modules/workspaces/workspace.routes.js";
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
@@ -63,6 +64,7 @@ export function buildApp({
     secureCookies: config.secureCookies,
     rateLimits: { ...DEFAULT_RATE_LIMITS, ...config.rateLimits },
   });
+  app.register(workspaceRoutes, { prefix: "/api/v1/workspaces", db: database });
 
   return app;
 }

@@ -2,9 +2,10 @@
 
 A collaborative document workspace, built as a pnpm monorepo.
 
-> **Status: Phase 2 — authentication.** Users can register, log in and log
-> out, and the web app has a protected account page. Workspaces, the document
-> editor, real-time sync and sharing are **not implemented yet**. See [docs/architecture.md](docs/architecture.md)
+> **Status: Phase 3 — workspaces.** Users can register and log in, create
+> workspaces, switch between them, rename and delete them from a dashboard.
+> Documents, the editor, real-time sync, member invitations and sharing are
+> **not implemented yet**. See [docs/architecture.md](docs/architecture.md)
 > for what exists today and what is planned.
 
 ## Tech stack
@@ -62,6 +63,8 @@ pnpm dev
 | Web           | http://localhost:3000               |
 | Register      | http://localhost:3000/register      |
 | Log in        | http://localhost:3000/login         |
+| Dashboard (protected) | http://localhost:3000/dashboard |
+| Workspace (protected) | http://localhost:3000/w/&lt;slug&gt; and `/w/<slug>/settings` |
 | Account (protected) | http://localhost:3000/account |
 | API health    | http://localhost:4000/api/v1/health |
 | Collaboration | http://localhost:4001/health        |
@@ -120,6 +123,29 @@ Security properties (details in [docs/architecture.md](docs/architecture.md#auth
 - Login is rate limited per client IP (20 attempts / 15 min) and per account
   (10 failed attempts / 15 min); registration per IP (10 / hour).
 
+## Workspaces
+
+All routes require a session.
+
+| Method | Route                              | Who                 | Description                                   |
+| ------ | ---------------------------------- | ------------------- | --------------------------------------------- |
+| GET    | `/api/v1/workspaces`               | any signed-in user  | Workspaces the user is a member of            |
+| POST   | `/api/v1/workspaces`               | any signed-in user  | Create a workspace; the creator becomes owner |
+| GET    | `/api/v1/workspaces/:slug`         | members             | One workspace, with the caller's role         |
+| PATCH  | `/api/v1/workspaces/:slug`         | owner, admin        | Rename                                        |
+| DELETE | `/api/v1/workspaces/:slug`         | owner               | Delete the workspace and its memberships      |
+| GET    | `/api/v1/workspaces/:slug/members` | members             | Member list                                   |
+
+A user who is not a member gets `404`, exactly as for a workspace that does not
+exist. A member whose role is too low gets `403`.
+
+Roles `OWNER`, `ADMIN` and `MEMBER` exist in the data model and are enforced by
+the API, but there is no way to invite members yet, so every workspace
+currently has exactly one member: its owner.
+
+In the dashboard, the header search (`Ctrl`/`⌘` + `K`) finds workspaces and
+pages; the sidebar switcher changes workspace.
+
 ## Scripts
 
 Run from the repository root.
@@ -171,7 +197,7 @@ The Prisma schema lives in `packages/database/prisma/schema.prisma`.
    `packages/database/prisma/migrations`, applies it and regenerates the client.
 3. Commit the migration.
 
-Current tables: `users` and `sessions`. The first migration is an intentional
+Current tables: `users`, `sessions`, `workspaces` and `workspace_members`. The first migration is an intentional
 empty baseline that establishes the migration history.
 
 ## Testing
@@ -185,11 +211,12 @@ Integration tests never touch development data. Before they run, a separate
 `<database>_test` database (for example `syncspace_test`) is created on the
 same PostgreSQL server and migrated automatically.
 
-- `apps/api` — auth and health route tests against the real app, real PostgreSQL
-  and real Argon2 hashing (requests sent in-process with `fastify.inject`), plus
-  env validation tests
+- `apps/api` — auth, workspace (ownership and access control) and health route
+  tests against the real app, real PostgreSQL and real Argon2 hashing (requests
+  sent in-process with `fastify.inject`), plus env validation tests
 - `apps/collaboration` — liveness endpoint tests against a real HTTP server
-- `packages/database` — connection, unique-constraint and cascade tests
+- `packages/database` — connection, unique-constraint, cascade and
+  transaction-rollback tests
 - `packages/shared` — schema and env validation helper tests
 
 There are no automated browser tests yet.

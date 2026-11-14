@@ -24,7 +24,8 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  sessions Session[]
+  sessions    Session[]
+  memberships WorkspaceMember[]
 
   @@map("users")
 }
@@ -42,4 +43,45 @@ model Session {
   @@index([userId])
   @@index([expiresAt])
   @@map("sessions")
+}
+
+enum WorkspaceRole {
+  /// Full control, including deleting the workspace.
+  OWNER
+  /// Can change workspace settings.
+  ADMIN
+  /// Can view the workspace.
+  MEMBER
+
+  @@map("workspace_role")
+}
+
+model Workspace {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  name      String
+  /// URL identifier, generated once at creation and never changed, so links stay valid after a rename.
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  members WorkspaceMember[]
+
+  @@map("workspaces")
+}
+
+/// Links a user to a workspace with a role. Access to a workspace is granted
+/// by the existence of this row and nothing else.
+model WorkspaceMember {
+  workspaceId String        @map("workspace_id") @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  role        WorkspaceRole
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The composite primary key means a user can be a member of a workspace only once.
+  @@id([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
 }

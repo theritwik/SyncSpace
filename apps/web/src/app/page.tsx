@@ -24,8 +24,8 @@ export default function HomePage() {
           A collaborative workspace for documents.
         </h1>
         <p className="text-lg text-muted-foreground text-pretty">
-          Accounts are available today. Workspaces and the document editor are under
-          development.
+          Create an account and organise your work in workspaces. The document editor is
+          under development.
         </p>
       </header>
 

@@ -43,6 +43,7 @@ export function createTestApp(overrides: TestAppOverrides = {}): {
 }
 
 export async function resetDatabase(database: PrismaClient): Promise<void> {
-  // Sessions are removed with their users (ON DELETE CASCADE).
+  // Memberships and sessions are removed with their parents (ON DELETE CASCADE).
+  await database.workspace.deleteMany();
   await database.user.deleteMany();
 }

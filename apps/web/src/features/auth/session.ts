@@ -2,6 +2,7 @@ import "server-only";
 
 import { authResponseSchema, SESSION_COOKIE_NAME, type PublicUser } from "@syncspace/shared";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { cache } from "react";
 
 import { getServerEnv } from "@/config/env";
@@ -33,3 +34,12 @@ export const getCurrentUser = cache(async (): Promise<PublicUser | null> => {
 
   return authResponseSchema.parse(await response.json()).user;
 });
+
+/** For pages that require a signed-in user: returns the user or redirects to the login page. */
+export async function requireUser(): Promise<PublicUser> {
+  const user = await getCurrentUser();
+  if (!user) {
+    redirect("/login");
+  }
+  return user;
+}
