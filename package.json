@@ -1,0 +1,32 @@
+{
+  "name": "syncspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Collaborative document workspace",
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "scripts": {
+    "dev": "pnpm build:packages && pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "build:packages": "pnpm --filter \"./packages/*\" build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm build:packages && pnpm -r typecheck",
+    "test": "pnpm build:packages && pnpm -r test",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down",
+    "db:generate": "pnpm --filter @syncspace/database db:generate",
+    "db:migrate": "pnpm --filter @syncspace/database db:migrate",
+    "db:deploy": "pnpm --filter @syncspace/database db:deploy",
+    "db:status": "pnpm --filter @syncspace/database db:status",
+    "db:studio": "pnpm --filter @syncspace/database db:studio"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.2"
+  }
+}

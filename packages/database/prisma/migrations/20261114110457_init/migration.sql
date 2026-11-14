@@ -1,0 +1,4 @@
+-- Baseline migration.
+-- Phase 1 has no domain tables yet. Applying this migration creates Prisma's
+-- `_prisma_migrations` history table, so every later schema change is tracked
+-- from a known starting point.

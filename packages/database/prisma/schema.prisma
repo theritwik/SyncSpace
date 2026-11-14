@@ -1,0 +1,87 @@
+// SyncSpace database schema.
+// Tables and columns use snake_case in PostgreSQL (@map / @@map);
+// the Prisma client exposes them in camelCase.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  runtime             = "nodejs"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  /// Always stored lower-cased, so the unique index is effectively case-insensitive.
+  email        String   @unique
+  name         String
+  /// Argon2id hash in PHC string format. The plain-text password is never stored.
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sessions    Session[]
+  memberships WorkspaceMember[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  /// SHA-256 hash of the session token. The token itself only lives in the user's cookie.
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @map("user_id") @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+enum WorkspaceRole {
+  /// Full control, including deleting the workspace.
+  OWNER
+  /// Can change workspace settings.
+  ADMIN
+  /// Can view the workspace.
+  MEMBER
+
+  @@map("workspace_role")
+}
+
+model Workspace {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  name      String
+  /// URL identifier, generated once at creation and never changed, so links stay valid after a rename.
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  members WorkspaceMember[]
+
+  @@map("workspaces")
+}
+
+/// Links a user to a workspace with a role. Access to a workspace is granted
+/// by the existence of this row and nothing else.
+model WorkspaceMember {
+  workspaceId String        @map("workspace_id") @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  role        WorkspaceRole
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The composite primary key means a user can be a member of a workspace only once.
+  @@id([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
