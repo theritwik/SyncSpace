@@ -24,8 +24,10 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  sessions    Session[]
-  memberships WorkspaceMember[]
+  sessions         Session[]
+  memberships      WorkspaceMember[]
+  createdFolders   Folder[]
+  createdDocuments Document[]
 
   @@map("users")
 }
@@ -50,7 +52,7 @@ enum WorkspaceRole {
   OWNER
   /// Can change workspace settings.
   ADMIN
-  /// Can view the workspace.
+  /// Can view the workspace and work with its folders and documents.
   MEMBER
 
   @@map("workspace_role")
@@ -64,7 +66,9 @@ model Workspace {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  members WorkspaceMember[]
+  members   WorkspaceMember[]
+  folders   Folder[]
+  documents Document[]
 
   @@map("workspaces")
 }
@@ -84,4 +88,55 @@ model WorkspaceMember {
   @@id([workspaceId, userId])
   @@index([userId])
   @@map("workspace_members")
+}
+
+/// A folder inside a workspace. Folders can be nested through `parentId`.
+model Folder {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  /// Null for a folder at the top level of the workspace.
+  parentId    String?  @map("parent_id") @db.Uuid
+  name        String
+  /// Kept as null if the creating user is deleted later.
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // The parent is referenced by (id, workspace) rather than id alone. The
+  // database therefore refuses a parent that lives in another workspace.
+  parent    Folder?   @relation("FolderTree", fields: [parentId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  children  Folder[]  @relation("FolderTree")
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  documents Document[]
+
+  // Target of the composite foreign keys above and in Document.
+  @@unique([id, workspaceId])
+  @@index([workspaceId])
+  @@index([parentId, workspaceId])
+  @@map("folders")
+}
+
+model Document {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  /// Null for a document at the top level of the workspace.
+  folderId    String?   @map("folder_id") @db.Uuid
+  title       String
+  createdById String?   @map("created_by_id") @db.Uuid
+  /// Soft deletion: a deleted document keeps its row and gets a timestamp here.
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // Same technique as Folder.parent: a document can only be placed in a
+  // folder of its own workspace.
+  folder    Folder?   @relation(fields: [folderId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  // Serves "documents of a workspace, most recently updated first".
+  @@index([workspaceId, deletedAt, updatedAt(sort: Desc)])
+  @@index([folderId, workspaceId])
+  @@map("documents")
 }

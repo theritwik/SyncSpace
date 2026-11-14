@@ -2,10 +2,10 @@
 
 A collaborative document workspace, built as a pnpm monorepo.
 
-> **Status: Phase 3 — workspaces.** Users can register and log in, create
-> workspaces, switch between them, rename and delete them from a dashboard.
-> Documents, the editor, real-time sync, member invitations and sharing are
-> **not implemented yet**. See [docs/architecture.md](docs/architecture.md)
+> **Status: Phase 4 — documents and folders.** Users can register and log in,
+> manage workspaces, and create, rename, move and delete documents organised
+> in nested folders. Documents have no content yet: the editor, real-time
+> sync, member invitations and sharing are **not implemented**. See [docs/architecture.md](docs/architecture.md)
 > for what exists today and what is planned.
 
 ## Tech stack
@@ -65,6 +65,7 @@ pnpm dev
 | Log in        | http://localhost:3000/login         |
 | Dashboard (protected) | http://localhost:3000/dashboard |
 | Workspace (protected) | http://localhost:3000/w/&lt;slug&gt; and `/w/<slug>/settings` |
+| Documents (protected) | `/w/<slug>/documents`, `/w/<slug>/folders/<folderId>`, `/documents/<documentId>` |
 | Account (protected) | http://localhost:3000/account |
 | API health    | http://localhost:4000/api/v1/health |
 | Collaboration | http://localhost:4001/health        |
@@ -146,6 +147,33 @@ currently has exactly one member: its owner.
 In the dashboard, the header search (`Ctrl`/`⌘` + `K`) finds workspaces and
 pages; the sidebar switcher changes workspace.
 
+## Documents and folders
+
+All routes require a session and membership of the workspace. Anything the
+caller may not see answers `404`.
+
+| Method | Route                                 | Description                                                       |
+| ------ | ------------------------------------- | ----------------------------------------------------------------- |
+| POST   | `/api/v1/workspaces/:slug/documents`  | Create a document (`title` and `folderId` optional)               |
+| GET    | `/api/v1/workspaces/:slug/documents`  | List documents, most recently updated first. Query: `folderId` (a folder id or `root`), `limit` (1–100) |
+| GET    | `/api/v1/documents/:id`               | One document with its workspace and folder path                   |
+| PATCH  | `/api/v1/documents/:id`               | Rename (`title`) and/or move (`folderId`, `null` = top level)     |
+| DELETE | `/api/v1/documents/:id`               | Soft delete                                                       |
+| POST   | `/api/v1/workspaces/:slug/folders`    | Create a folder (`parentId` optional, at most 5 levels deep)      |
+| GET    | `/api/v1/workspaces/:slug/folders`    | All folders of the workspace as a flat list                       |
+
+Workspaces are addressed by their slug, as in the workspace routes; documents
+and folders by id.
+
+- **Soft delete** sets `deleted_at`. The row stays in the database, but the
+  document disappears from every endpoint. There is no trash or restore yet.
+- **Folders** can be nested and are created in place; they cannot be renamed,
+  moved or deleted yet.
+- A document can only be placed in a folder of its own workspace. The API
+  validates this, and a composite foreign key in the database enforces it.
+- **Documents have no content.** The document page shows the title (editable
+  in place), metadata and an empty state where the editor will go.
+
 ## Scripts
 
 Run from the repository root.
@@ -197,7 +225,8 @@ The Prisma schema lives in `packages/database/prisma/schema.prisma`.
    `packages/database/prisma/migrations`, applies it and regenerates the client.
 3. Commit the migration.
 
-Current tables: `users`, `sessions`, `workspaces` and `workspace_members`. The first migration is an intentional
+Current tables: `users`, `sessions`, `workspaces`, `workspace_members`,
+`folders` and `documents`. The first migration is an intentional
 empty baseline that establishes the migration history.
 
 ## Testing
@@ -211,12 +240,13 @@ Integration tests never touch development data. Before they run, a separate
 `<database>_test` database (for example `syncspace_test`) is created on the
 same PostgreSQL server and migrated automatically.
 
-- `apps/api` — auth, workspace (ownership and access control) and health route
+- `apps/api` — auth, workspace, document and folder (access control, validation,
+  soft delete) and health route
   tests against the real app, real PostgreSQL and real Argon2 hashing (requests
   sent in-process with `fastify.inject`), plus env validation tests
 - `apps/collaboration` — liveness endpoint tests against a real HTTP server
-- `packages/database` — connection, unique-constraint, cascade and
-  transaction-rollback tests
+- `packages/database` — connection, unique-constraint, cascade,
+  transaction-rollback and cross-workspace integrity tests
 - `packages/shared` — schema and env validation helper tests
 
 There are no automated browser tests yet.

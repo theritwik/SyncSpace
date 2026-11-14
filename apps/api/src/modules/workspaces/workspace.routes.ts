@@ -10,20 +10,20 @@ import {
   type WorkspaceSummary,
 } from "@syncspace/shared";
 import type { FastifyPluginAsync } from "fastify";
-import { z } from "zod";
 
 import { validate } from "../../http/errors.js";
 import { requireUser } from "../auth/session.js";
 import { generateWorkspaceSlug } from "./slug.js";
-import { assertAllowed, requireWorkspaceAccess, type WorkspaceAccess } from "./workspace.access.js";
+import {
+  assertAllowed,
+  requireWorkspaceAccess,
+  slugParamsSchema,
+  type WorkspaceAccess,
+} from "./workspace.access.js";
 
 export interface WorkspaceRoutesOptions {
   db: PrismaClient;
 }
-
-const slugParamsSchema = z.object({
-  slug: z.string().regex(/^[a-z0-9-]{1,64}$/, "Invalid workspace identifier."),
-});
 
 const SLUG_ATTEMPTS = 3;
 

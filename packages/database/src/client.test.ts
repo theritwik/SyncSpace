@@ -148,3 +148,107 @@ describe("workspaces schema", () => {
     expect(await client.workspace.count()).toBe(0);
   });
 });
+
+describe("folders and documents schema", () => {
+  const MISSING_ID = "00000000-0000-7000-8000-000000000000";
+
+  beforeEach(async () => {
+    await client.workspace.deleteMany();
+    await client.user.deleteMany();
+  });
+
+  async function createWorkspace(slug: string) {
+    return client.workspace.create({ data: { name: slug, slug } });
+  }
+
+  it("refuses a document in a folder of another workspace", async () => {
+    const first = await createWorkspace("first");
+    const second = await createWorkspace("second");
+    const folderInSecond = await client.folder.create({
+      data: { name: "Theirs", workspaceId: second.id },
+    });
+
+    // The composite foreign key (folder_id, workspace_id) has no matching folder row.
+    await expect(
+      client.document.create({
+        data: { title: "Misplaced", workspaceId: first.id, folderId: folderInSecond.id },
+      }),
+    ).rejects.toThrow();
+    expect(await client.document.count()).toBe(0);
+  });
+
+  it("refuses a folder whose parent is in another workspace, missing, or itself", async () => {
+    const first = await createWorkspace("first");
+    const second = await createWorkspace("second");
+    const folderInSecond = await client.folder.create({
+      data: { name: "Theirs", workspaceId: second.id },
+    });
+    const folder = await client.folder.create({ data: { name: "Mine", workspaceId: first.id } });
+
+    await expect(
+      client.folder.create({
+        data: { name: "Cross", workspaceId: first.id, parentId: folderInSecond.id },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      client.folder.create({ data: { name: "Orphan", workspaceId: first.id, parentId: MISSING_ID } }),
+    ).rejects.toThrow();
+    // CHECK constraint folders_not_own_parent.
+    await expect(
+      client.folder.update({ where: { id: folder.id }, data: { parentId: folder.id } }),
+    ).rejects.toThrow();
+  });
+
+  it("refuses folders and documents without an existing workspace", async () => {
+    await expect(
+      client.folder.create({ data: { name: "Nowhere", workspaceId: MISSING_ID } }),
+    ).rejects.toThrow();
+    await expect(
+      client.document.create({ data: { title: "Nowhere", workspaceId: MISSING_ID } }),
+    ).rejects.toThrow();
+  });
+
+  it("removes folders and documents (including soft-deleted ones) with their workspace", async () => {
+    const workspace = await createWorkspace("first");
+    const other = await createWorkspace("second");
+    const parent = await client.folder.create({ data: { name: "Parent", workspaceId: workspace.id } });
+    const child = await client.folder.create({
+      data: { name: "Child", workspaceId: workspace.id, parentId: parent.id },
+    });
+    await client.document.createMany({
+      data: [
+        { title: "Top level", workspaceId: workspace.id },
+        { title: "Nested", workspaceId: workspace.id, folderId: child.id },
+        { title: "Deleted", workspaceId: workspace.id, deletedAt: new Date() },
+        { title: "Unrelated", workspaceId: other.id },
+      ],
+    });
+
+    await client.workspace.delete({ where: { id: workspace.id } });
+
+    expect(await client.folder.count()).toBe(0);
+    expect((await client.document.findMany()).map((document) => document.title)).toEqual([
+      "Unrelated",
+    ]);
+  });
+
+  it("keeps folders and documents when their creator is deleted", async () => {
+    const user = await client.user.create({
+      data: { name: "Grace Hopper", email: "grace@example.com", passwordHash: "test-hash" },
+    });
+    const workspace = await createWorkspace("first");
+    const folder = await client.folder.create({
+      data: { name: "Folder", workspaceId: workspace.id, createdById: user.id },
+    });
+    const document = await client.document.create({
+      data: { title: "Doc", workspaceId: workspace.id, folderId: folder.id, createdById: user.id },
+    });
+
+    await client.user.delete({ where: { id: user.id } });
+
+    expect((await client.folder.findUniqueOrThrow({ where: { id: folder.id } })).createdById).toBeNull();
+    expect(
+      (await client.document.findUniqueOrThrow({ where: { id: document.id } })).createdById,
+    ).toBeNull();
+  });
+});

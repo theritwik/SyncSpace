@@ -1,12 +1,19 @@
 "use client";
 
 import type { WorkspaceSummary } from "@syncspace/shared";
-import { HouseIcon, LayoutGridIcon, SettingsIcon, type LucideIcon } from "lucide-react";
+import {
+  FileTextIcon,
+  HouseIcon,
+  LayoutGridIcon,
+  SettingsIcon,
+  type LucideIcon,
+} from "lucide-react";
 import Link from "next/link";
-import { useParams, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 
+import { useActiveWorkspaceSlug } from "./active-workspace";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 interface SidebarProps {
@@ -18,7 +25,7 @@ interface SidebarProps {
 /** Sidebar contents, shared by the desktop sidebar and the mobile drawer. */
 export function Sidebar({ workspaces, onNavigate }: SidebarProps) {
   const pathname = usePathname();
-  const { slug } = useParams<{ slug?: string }>();
+  const slug = useActiveWorkspaceSlug();
   const current = workspaces.find((workspace) => workspace.slug === slug);
 
   return (
@@ -43,6 +50,19 @@ export function Sidebar({ workspaces, onNavigate }: SidebarProps) {
               onNavigate={onNavigate}
             >
               Overview
+            </NavLink>
+            <NavLink
+              href={`/w/${current.slug}/documents`}
+              icon={FileTextIcon}
+              // Folder pages and single documents belong to this section too.
+              active={
+                pathname.startsWith(`/w/${current.slug}/documents`) ||
+                pathname.startsWith(`/w/${current.slug}/folders`) ||
+                pathname.startsWith("/documents/")
+              }
+              onNavigate={onNavigate}
+            >
+              Documents
             </NavLink>
             <NavLink
               href={`/w/${current.slug}/settings`}

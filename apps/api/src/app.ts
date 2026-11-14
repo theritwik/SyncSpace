@@ -6,6 +6,8 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastif
 import { registerErrorHandlers, tooManyAttempts } from "./http/errors.js";
 import { registerOriginCheck } from "./http/origin-check.js";
 import { authRoutes, type AuthRateLimits } from "./modules/auth/auth.routes.js";
+import { documentRoutes } from "./modules/documents/document.routes.js";
+import { folderRoutes } from "./modules/folders/folder.routes.js";
 import { healthRoutes } from "./modules/health/health.routes.js";
 import { workspaceRoutes } from "./modules/workspaces/workspace.routes.js";
 
@@ -65,6 +67,8 @@ export function buildApp({
     rateLimits: { ...DEFAULT_RATE_LIMITS, ...config.rateLimits },
   });
   app.register(workspaceRoutes, { prefix: "/api/v1/workspaces", db: database });
+  app.register(folderRoutes, { prefix: "/api/v1", db: database });
+  app.register(documentRoutes, { prefix: "/api/v1", db: database });
 
   return app;
 }

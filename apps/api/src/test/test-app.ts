@@ -1,5 +1,6 @@
 import { createDatabaseClient, type PrismaClient } from "@syncspace/database";
-import type { FastifyInstance } from "fastify";
+import { authResponseSchema, SESSION_COOKIE_NAME } from "@syncspace/shared";
+import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { inject } from "vitest";
 
 import { buildApp, type AppConfig, type AppOptions } from "../app.js";
@@ -46,4 +47,49 @@ export async function resetDatabase(database: PrismaClient): Promise<void> {
   // Memberships and sessions are removed with their parents (ON DELETE CASCADE).
   await database.workspace.deleteMany();
   await database.user.deleteMany();
+}
+
+export interface TestUser {
+  id: string;
+  cookies: Record<string, string>;
+}
+
+/** Signs a user up through the real registration route and returns their session cookie. */
+export async function registerTestUser(
+  app: FastifyInstance,
+  name: string,
+  email: string,
+): Promise<TestUser> {
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/v1/auth/register",
+    headers: { origin: TEST_WEB_ORIGIN },
+    payload: { name, email, password: "correct horse battery" },
+  });
+  const token = response.cookies.find((cookie) => cookie.name === SESSION_COOKIE_NAME)?.value;
+  if (response.statusCode !== 201 || !token) {
+    throw new Error(`Test user registration failed with status ${response.statusCode}`);
+  }
+
+  return {
+    id: authResponseSchema.parse(response.json()).user.id,
+    cookies: { [SESSION_COOKIE_NAME]: token },
+  };
+}
+
+/** Sends an in-process request the way a browser would (Origin header on writes). */
+export function apiRequest(
+  app: FastifyInstance,
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  path: string,
+  user?: TestUser,
+  payload?: object,
+): Promise<LightMyRequestResponse> {
+  return app.inject({
+    method,
+    url: `/api/v1${path}`,
+    headers: method === "GET" ? {} : { origin: TEST_WEB_ORIGIN },
+    cookies: user?.cookies,
+    payload,
+  });
 }
