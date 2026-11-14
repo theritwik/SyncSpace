@@ -6,6 +6,7 @@ import {
   HouseIcon,
   LayoutGridIcon,
   SettingsIcon,
+  UsersIcon,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -58,6 +59,7 @@ export function Sidebar({ workspaces, onNavigate }: SidebarProps) {
               active={
                 pathname.startsWith(`/w/${current.slug}/documents`) ||
                 pathname.startsWith(`/w/${current.slug}/folders`) ||
+                // Only when the open document belongs to this workspace (see ActiveWorkspace).
                 pathname.startsWith("/documents/")
               }
               onNavigate={onNavigate}
@@ -83,6 +85,14 @@ export function Sidebar({ workspaces, onNavigate }: SidebarProps) {
             onNavigate={onNavigate}
           >
             All workspaces
+          </NavLink>
+          <NavLink
+            href="/shared"
+            icon={UsersIcon}
+            active={pathname === "/shared"}
+            onNavigate={onNavigate}
+          >
+            Shared with me
           </NavLink>
         </NavSection>
       </nav>

@@ -1,6 +1,7 @@
 import { HocuspocusProvider } from "@hocuspocus/provider";
 import {
   createDatabaseClient,
+  type DocumentRole,
   type PrismaClient,
   type WorkspaceRole,
 } from "@syncspace/database";
@@ -10,6 +11,7 @@ import {
   COLLABORATION_FIELD,
 } from "@syncspace/shared";
 import { signCollaborationToken } from "@syncspace/shared/collaboration-token";
+import * as encoding from "lib0/encoding";
 import { afterAll, afterEach, beforeEach, describe, expect, inject, it } from "vitest";
 import * as Y from "yjs";
 
@@ -670,5 +672,178 @@ describe("access revocation", () => {
 
     await waitFor(() => isSaved(alice), "still connected and saving");
     expect(alice.closeCodes).toEqual([]);
+  });
+});
+
+describe("document-level sharing (grants)", () => {
+  async function grant(user: TestUser, role: DocumentRole, document = documentId) {
+    await db.documentPermission.upsert({
+      where: { documentId_userId: { documentId: document, userId: user.id } },
+      create: { documentId: document, userId: user.id, role, grantedById: owner.id },
+      update: { role },
+    });
+  }
+
+  async function revoke(user: TestUser) {
+    await db.documentPermission.delete({
+      where: { documentId_userId: { documentId, userId: user.id } },
+    });
+  }
+
+  /**
+   * Sends a Yjs update to the server as a hand-built protocol frame on the
+   * client's open WebSocket, bypassing the provider entirely. This is what a
+   * custom or tampered client could do.
+   */
+  function sendRawUpdate(client: Client, update: Uint8Array) {
+    const encoder = encoding.createEncoder();
+    encoding.writeVarString(encoder, documentId); // which room
+    encoding.writeVarUint(encoder, 0); // Hocuspocus message type: Sync
+    encoding.writeVarUint(encoder, 2); // Yjs sync message type: Update
+    encoding.writeVarUint8Array(encoder, update);
+
+    const socket = (
+      client.provider.configuration.websocketProvider as unknown as { webSocket: WebSocket | null }
+    ).webSocket;
+    if (!socket) throw new Error("Client has no open WebSocket");
+    socket.send(encoding.toUint8Array(encoder));
+  }
+
+  function updateInserting(text: string): Uint8Array {
+    const forged = new Y.Doc();
+    forged.getText("test").insert(0, text);
+    return Y.encodeStateAsUpdate(forged);
+  }
+
+  it("lets someone outside the workspace edit when the document is shared with them as editor", async () => {
+    const outsider = await createUser("Outsider");
+    await grant(outsider, "EDITOR");
+    const alice = connect(owner);
+    const guest = connect(outsider);
+    await Promise.all([synced(alice), synced(guest)]);
+
+    expect(guest.provider.authorizedScope).toBe("read-write");
+    guest.text.insert(0, "from the guest editor");
+
+    await waitFor(() => alice.text.toString() === "from the guest editor", "owner receives it");
+    await waitFor(() => isSaved(guest), "it is saved");
+    expect(await storedText()).toBe("from the guest editor");
+  });
+
+  it("gives access to the shared document only, not to others in the workspace", async () => {
+    const outsider = await createUser("Outsider");
+    await grant(outsider, "OWNER");
+    const otherDocument = (await db.document.create({ data: { title: "Other", workspaceId } })).id;
+
+    const intruder = connect(outsider, { document: otherDocument });
+
+    await waitFor(() => intruder.denied.length > 0, "connection is rejected");
+    expect(intruder.denied[0]).toBe("access-denied");
+  });
+
+  it("discards a viewer's edits, including raw update frames sent directly on the WebSocket", async () => {
+    const outsider = await createUser("Outsider");
+    await grant(outsider, "VIEWER");
+    const alice = connect(owner);
+    await synced(alice);
+    alice.text.insert(0, "owner text");
+
+    const viewer = connect(outsider);
+    await synced(viewer);
+    expect(viewer.provider.authorizedScope).toBe("readonly");
+    await waitFor(() => viewer.text.toString() === "owner text", "viewer can read");
+
+    // 1. Through the normal client, ignoring that it is read-only.
+    viewer.text.insert(0, "VIEWER-VIA-PROVIDER ");
+    // 2. Hand-built protocol frames, as a tampered client would send.
+    sendRawUpdate(viewer, updateInserting("VIEWER-RAW-FRAME "));
+    sendRawUpdate(viewer, Y.encodeStateAsUpdate(viewer.doc));
+
+    // Give the server time to (not) apply them, then make a legitimate edit to force a save.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    alice.text.insert(alice.text.length, " +more");
+    await waitFor(() => isSaved(alice), "owner's edit saved");
+
+    expect(alice.text.toString()).toBe("owner text +more");
+    expect(await storedText()).toBe("owner text +more");
+    // The same raw frame from an editor is accepted, so the frame itself is valid.
+    sendRawUpdate(alice, updateInserting("OWNER-RAW-FRAME "));
+    await waitFor(async () => (await storedText())?.includes("OWNER-RAW-FRAME") ?? false, "editor's raw frame is applied");
+  });
+
+  it("cuts off a connected user as soon as their grant is revoked, without any new login", async () => {
+    const outsider = await createUser("Outsider");
+    await grant(outsider, "EDITOR");
+    const alice = connect(owner);
+    const guest = connect(outsider);
+    await Promise.all([synced(alice), synced(guest)]);
+    guest.text.insert(0, "before ");
+    await waitFor(() => alice.text.toString() === "before ", "guest can edit before revocation");
+
+    await revoke(outsider);
+    await collaboration.recheckAccess();
+
+    await waitFor(() => guest.closeCodes.includes(ACCESS_REVOKED_CLOSE_CODE), "guest is disconnected");
+    // Same session as before; the reconnect attempt is refused.
+    await waitFor(() => guest.denied.includes("access-denied"), "reconnect is rejected", 10_000);
+
+    guest.text.insert(0, "AFTER-REVOCATION ");
+    alice.text.insert(alice.text.length, "after");
+    await waitFor(() => isSaved(alice), "owner's edit saved");
+    expect(alice.text.toString()).toBe("before after");
+    expect(await storedText()).toBe("before after");
+    // And nothing the owner writes reaches the removed user any more.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(guest.text.toString()).not.toContain("after");
+  });
+
+  it("applies a downgrade from editor to viewer to a user who is already connected", async () => {
+    const outsider = await createUser("Outsider");
+    await grant(outsider, "EDITOR");
+    const alice = connect(owner);
+    const guest = connect(outsider);
+    await Promise.all([synced(alice), synced(guest)]);
+
+    await grant(outsider, "VIEWER");
+    await collaboration.recheckAccess();
+
+    await waitFor(() => guest.provider.authorizedScope === "readonly", "guest becomes read-only", 10_000);
+    guest.text.insert(0, "AFTER-DOWNGRADE ");
+    sendRawUpdate(guest, updateInserting("RAW-AFTER-DOWNGRADE "));
+    alice.text.insert(0, "owner");
+    await waitFor(() => isSaved(alice), "owner's edit saved");
+    expect(alice.text.toString()).toBe("owner");
+    // Still allowed to read.
+    await waitFor(() => guest.text.toString().includes("owner"), "viewer still receives updates");
+  });
+
+  it("applies an upgrade from viewer to editor to a user who is already connected", async () => {
+    const outsider = await createUser("Outsider");
+    await grant(outsider, "VIEWER");
+    const alice = connect(owner);
+    const guest = connect(outsider);
+    await Promise.all([synced(alice), synced(guest)]);
+
+    await grant(outsider, "EDITOR");
+    await collaboration.recheckAccess();
+
+    await waitFor(() => guest.provider.authorizedScope === "read-write", "guest becomes editor", 10_000);
+    await synced(guest);
+    guest.text.insert(0, "now allowed");
+    await waitFor(() => alice.text.toString() === "now allowed", "owner receives the edit");
+  });
+
+  it("keeps a workspace member's access when their separate grant is removed", async () => {
+    await grant(member, "VIEWER"); // lower than what membership gives; has no effect
+    const bob = connect(member);
+    await synced(bob);
+    expect(bob.provider.authorizedScope).toBe("read-write");
+
+    await revoke(member);
+    await collaboration.recheckAccess();
+    bob.text.insert(0, "still a member");
+
+    await waitFor(() => isSaved(bob), "member keeps editing");
+    expect(bob.closeCodes).toEqual([]);
   });
 });

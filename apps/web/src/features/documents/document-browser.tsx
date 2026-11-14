@@ -100,7 +100,7 @@ export function DocumentBrowser({
           <h2 id="documents-heading" className="text-sm font-medium text-muted-foreground">
             Documents
           </h2>
-          <DocumentList documents={documents} folders={folders} canEdit={canEdit} />
+          <DocumentList documents={documents} folders={folders} canOrganize={canEdit} />
         </section>
       ) : subfolders.length > 0 ? (
         <p className="text-sm text-muted-foreground">

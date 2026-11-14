@@ -36,14 +36,24 @@ interface DocumentActionsProps {
   folders: FolderSummary[];
   /** Where to go after deleting. Set it when the current page shows the deleted document. */
   redirectAfterDelete?: string;
+  /** What the user may do. The API enforces these; here they only decide what is offered. */
+  can: { rename: boolean; move: boolean; delete: boolean };
 }
 
 type OpenDialog = "rename" | "move" | "delete" | null;
 
 /** The "…" menu of a document: rename, move to a folder, delete. */
-export function DocumentActions({ document, folders, redirectAfterDelete }: DocumentActionsProps) {
+export function DocumentActions({
+  document,
+  folders,
+  redirectAfterDelete,
+  can,
+}: DocumentActionsProps) {
   const [openDialog, setOpenDialog] = useState<OpenDialog>(null);
   const close = () => setOpenDialog(null);
+
+  // No empty menu for people who may only read.
+  if (!can.rename && !can.move && !can.delete) return null;
 
   return (
     <>
@@ -54,19 +64,25 @@ export function DocumentActions({ document, folders, redirectAfterDelete }: Docu
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
-          <DropdownMenuItem onSelect={() => setOpenDialog("rename")}>
-            <PencilIcon aria-hidden />
-            Rename
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setOpenDialog("move")}>
-            <FolderInputIcon aria-hidden />
-            Move to…
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => setOpenDialog("delete")}>
-            <Trash2Icon aria-hidden />
-            Delete
-          </DropdownMenuItem>
+          {can.rename ? (
+            <DropdownMenuItem onSelect={() => setOpenDialog("rename")}>
+              <PencilIcon aria-hidden />
+              Rename
+            </DropdownMenuItem>
+          ) : null}
+          {can.move ? (
+            <DropdownMenuItem onSelect={() => setOpenDialog("move")}>
+              <FolderInputIcon aria-hidden />
+              Move to…
+            </DropdownMenuItem>
+          ) : null}
+          {can.delete && (can.rename || can.move) ? <DropdownMenuSeparator /> : null}
+          {can.delete ? (
+            <DropdownMenuItem variant="destructive" onSelect={() => setOpenDialog("delete")}>
+              <Trash2Icon aria-hidden />
+              Delete
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
 

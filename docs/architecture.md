@@ -3,7 +3,7 @@
 This document separates what **exists today** from what is **planned**.
 Anything under "Planned" is a direction, not an implementation.
 
-## Current architecture (Phase 5 — real-time collaborative editor)
+## Current architecture (Phase 6 — document sharing and permissions)
 
 ```
                  ┌──────────────────────┐
@@ -266,15 +266,15 @@ workspaces ──< folders ──< folders (parent_id, nested)
 
 ### Access control
 
-There are no per-document permissions: access follows workspace membership.
-Owners, admins and members may create, rename, move and delete documents and
-create folders; viewers may only read (`403` on writes).
+Access to a document comes from workspace membership and from document
+grants; see [Authorization model](#authorization-model). Creating documents
+and folders needs a workspace role other than viewer.
 
 - `/workspaces/:slug/...` routes go through `requireWorkspaceAccess()`, as
   the workspace routes do.
 - `/documents/:id` routes go through `requireDocumentAccess()`, which loads
-  the document only if it is not deleted **and** the caller is a member of
-  its workspace. Anything else is `404`.
+  the document only if it is not deleted **and** the caller has an effective
+  role for it. Anything else is `404`.
 - A `folderId`/`parentId` in a request body is checked against the folders
   of the target workspace and rejected with `400` otherwise, which is also
   the answer for a folder of another workspace.
@@ -297,6 +297,123 @@ create folders; viewers may only read (`403` on writes).
 - **Names are not unique:** two documents or sibling folders may share a name.
 - **Search does not cover documents** yet (workspaces and pages only).
 - **Timestamps are shown in UTC**, because they are rendered on the server.
+
+## Authorization model
+
+This section is the reference for "who may do what". Everything else in the
+code that makes an access decision follows from it.
+
+### Two sources of access
+
+```
+ workspace_members        role in the document's workspace ──┐
+ (OWNER / ADMIN /         (if the user is a member)          │
+  MEMBER / VIEWER)                                           ├─▶ resolveDocumentRole()
+                                                             │   = effective role:
+ document_permissions     role granted on this document ─────┘   OWNER, EDITOR, VIEWER
+ (OWNER / EDITOR /        (if it was shared with the user)       or no access
+  VIEWER)
+```
+
+| Workspace role | Implies document role |
+| -------------- | --------------------- |
+| Owner, Admin   | Owner                 |
+| Member         | Editor                |
+| Viewer         | Viewer                |
+
+The **effective role is the higher of the two**. A grant can add access (for
+someone outside the workspace, or to raise a workspace viewer on one
+document) but can never reduce what workspace membership gives. With neither
+source there is no access.
+
+The rule is one pure function, `resolveDocumentRole` in
+`packages/shared/src/document-permissions.ts`. The API
+(`requireDocumentAccess`) and the collaboration server
+(`resolveDocumentAccess`) each load the two inputs from the database and call
+it, so the two services cannot disagree.
+
+### What each role may do
+
+| Action                                    | Owner | Editor | Viewer | Notes                                         |
+| ----------------------------------------- | ----- | ------ | ------ | --------------------------------------------- |
+| Read title, metadata, content             | yes   | yes    | yes    |                                               |
+| See who the document is shared with       | yes   | yes    | yes    | email addresses only for owners               |
+| Edit content (WebSocket)                  | yes   | yes    | no     |                                               |
+| Rename                                    | yes   | yes    | no     |                                               |
+| Move to another folder                    | yes   | yes    | no     | also needs a workspace role other than viewer |
+| Share, change roles, remove collaborators | yes   | no     | no     | not on one's own grant                        |
+| Delete                                    | yes   | no     | no     |                                               |
+
+Creating a document makes the creator its owner (an `OWNER` grant written in
+the same transaction as the document).
+
+### Where it is enforced
+
+| Entry point                          | Check |
+| ------------------------------------ | ----- |
+| Every `/documents/:id...` REST route | `requireDocumentAccess()` first, then the capability the route needs |
+| `/workspaces/:slug/...` REST routes  | `requireWorkspaceAccess()`; a document grant gives no access to the workspace, its lists or its folders |
+| Opening an editor connection         | `onAuthenticate`: signed token, then `resolveDocumentAccess()` from the database |
+| Every incoming document update       | Hocuspocus discards updates from connections marked read-only; the mark is set by the server from the effective role |
+| Connections that are already open    | `recheckAccess()` re-resolves every connection periodically; no access closes it, a changed write permission forces a reconnect |
+
+Principles that hold throughout:
+
+- **The client is never asked.** Roles, user ids and "can edit" flags in
+  request bodies, headers or tokens are ignored; identity comes from the
+  session, permissions from the database. The `canEdit`/`canShare` fields in
+  API responses exist only so the UI can hide controls.
+- **404 before 403.** Without access, every route answers `404` exactly as
+  for a document that does not exist, so ids cannot be probed. `403` is only
+  returned to someone who can already see the document.
+- **Sharing inputs are validated**: the email with the same rules as
+  registration, the role against the fixed list of three, ids as UUIDs. The
+  grantor is the signed-in user.
+- **No public links.** Access always belongs to a specific registered user.
+
+### Changes for users who are already connected
+
+REST requests are authorised on every request, so a role change or removal
+applies to the next request. Open editor connections are re-checked every
+`COLLABORATION_ACCESS_RECHECK_SECONDS` (default 30):
+
+- **Removed** (grant revoked, removed from the workspace, document deleted):
+  the connection is closed and the reconnect refused. The editor locks and
+  shows "No access". The user's login session is untouched.
+- **Downgraded to viewer:** the connection is closed and re-established
+  read-only; the editor locks and keeps receiving updates.
+- **Upgraded to editor:** the reconnect is read-write and the toolbar appears.
+
+### Limitations of the authorization model
+
+- **Changes reach open editors after up to 30 seconds**, not instantly.
+  During that window a just-downgraded or just-removed user can still edit.
+  REST access changes immediately.
+- **Sharing reveals whether an email is registered** to document owners
+  ("No SyncSpace account uses this email address"). The endpoint is rate
+  limited (60 per hour per client IP) to slow enumeration. Avoiding it needs
+  email invitations.
+- **A creator's owner grant survives leaving the workspace.** There is no
+  API for removing workspace members yet; when one is added it must also
+  remove that user's grants in the workspace.
+- **Grants only add access.** A specific workspace member cannot be excluded
+  from one document, and a grant lower than the person's workspace-derived
+  role has no effect.
+- **Any owner can remove another owner's grant**, including the creator's.
+  Workspace owners and admins always remain owners, so a document cannot end
+  up without one. There is no ownership transfer flow.
+- **Roles are per document.** There is no sharing of folders, and no groups.
+- **People outside the workspace see the workspace's name** on documents
+  shared with them, and the names of other direct collaborators.
+- **No notification** is sent when a document is shared; the recipient finds
+  it under "Shared with me".
+- **No audit log** of sharing changes beyond `granted_by_id` on the current
+  grant.
+- **Presence names remain self-reported** (see the collaboration section).
+- **Open pages do not refresh their server-rendered controls** on a role
+  change: after an upgrade the editor becomes editable at once, but the title
+  field and menus appear on the next page load. The API enforces the current
+  role either way.
 
 ## Real-time collaboration
 
@@ -339,11 +456,11 @@ Browser                         API                    Collaboration server     
 
 ### Permissions
 
-| Role | Editor | Enforced by |
+| Effective document role | Editor | Enforced by |
 | --- | --- | --- |
-| Owner, Admin, Member | read and write | — |
+| Owner, Editor | read and write | — |
 | Viewer | read-only | the server marks the connection read-only and Hocuspocus discards every document update it sends |
-| not a member | no connection | `onAuthenticate` rejects it |
+| none | no connection | `onAuthenticate` rejects it |
 
 The browser hides the toolbar and locks the editor based on the scope the
 *server* reports after authentication, but that is presentation only. A
@@ -418,7 +535,8 @@ modified client that sends updates anyway is ignored (covered by tests).
   page loads and does not tick while you edit.
 - **The token secret is shared** between API and collaboration service and
   must be rotated on both together.
-- **The viewer role cannot be assigned from the UI** (no member management yet).
+- **The workspace viewer role cannot be assigned from the UI** (no member
+  management yet); the document viewer role can, through sharing.
 - **Automated tests cover the server with real clients; the browser editor
   itself was verified with one-off two-browser scripts**, not a committed
   browser test suite.
@@ -439,6 +557,7 @@ apps/api/src/
   modules/folders/              folder.routes.ts + tests
   modules/documents/            document.routes.ts, document.access.ts + tests
   modules/collaboration/        collaboration.routes.ts (token endpoint only) + tests
+  modules/sharing/              sharing.routes.ts (grants, shared-with-me) + tests
 
 apps/collaboration/src/
   main.ts                       process entry: env, database, listen, re-check timer, shutdown
@@ -463,6 +582,7 @@ apps/web/src/
   features/workspaces/          data loading, create/rename/delete, lists, settings
   features/documents/           data loading, document browser, document page, rename/move/delete, folders
   features/editor/              collaboration session (provider, status), Tiptap editor, toolbar, presence
+  features/sharing/             share dialog, "Shared with me" list
   features/system-status/       health fetch + status component
 ```
 
@@ -492,7 +612,8 @@ a dedicated test database, without opening a port.
   `ON DELETE CASCADE`), `workspaces` (unique slug), `workspace_members`
   (composite primary key, role enum), `folders`, `documents` and
   `document_contents` (Yjs state as `bytea`, one row per document, kept out
-  of the `documents` table so lists never load it). Ids are UUIDv7.
+  of the `documents` table so lists never load it) and `document_permissions`
+  (one grant per user and document). Ids are UUIDv7.
 - Integration tests use a separate `<database>_test` database, created and
   migrated on demand by `setupTestDatabase()` (`@syncspace/database/testing`).
 
@@ -526,7 +647,7 @@ The following is intended direction for later phases. None of it is built.
 | ----------------- | ---------------------------------------------------------------------------------------------- |
 | Account features  | Email verification, password reset, session management ("log out everywhere").                 |
 | Membership        | Invitations, role changes (including assigning viewers), removing members, ownership transfer. |
-| Sharing           | Document-level access and share links.                                                         |
+| Sharing           | Email invitations for people without an account, share links, folder-level sharing, instant revocation for open editors. |
 | Editor            | Links, images, tables; comments; version history; offline storage in the browser.              |
 | Scaling           | Several collaboration server instances behind a shared pub/sub layer (e.g. Redis).             |
 | Deployment        | Container images per app and a deployment pipeline.                                            |

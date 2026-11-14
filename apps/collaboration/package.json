@@ -21,6 +21,7 @@
   "devDependencies": {
     "@hocuspocus/provider": "^4.8.0",
     "@types/node": "^24.19.2",
+    "lib0": "^0.2.120",
     "tsx": "^4.23.15",
     "vitest": "^5.1.0"
   }
